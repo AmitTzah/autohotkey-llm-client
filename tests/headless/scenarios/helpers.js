@@ -102,7 +102,20 @@ async function saveSettings(cdp, dataDir, timeoutMs = 20000) {
   // The host saves synchronously, then sends settingsSaved; the page clears
   // the dirty state only after that acknowledgement. Waiting for the button
   // transition prevents a second save from racing the first one.
-  await cdp.waitFor('document.querySelector(".nav-footer .btn-primary") && document.querySelector(".nav-footer .btn-primary").disabled === true', timeoutMs, 100, 'settings save acknowledgement');
+  try {
+    await cdp.waitFor('document.querySelector(".nav-footer .btn-primary") && document.querySelector(".nav-footer .btn-primary").disabled === true', timeoutMs, 100, 'settings save acknowledgement');
+  } catch (err) {
+    const state = await cdp.eval(`(() => {
+      const modal = document.getElementById('confirmModal');
+      const button = document.querySelector('.nav-footer .btn-primary');
+      return {
+        dirty: !!(window.SettingsPanel && window.SettingsPanel.isDirty && window.SettingsPanel.isDirty()),
+        saveDisabled: !!(button && button.disabled),
+        confirmText: modal && modal.classList.contains('open') ? modal.textContent : ''
+      };
+    })()`);
+    throw new Error(err.message + ' | settings state=' + JSON.stringify(state));
+  }
   await cdp.waitFor('window.SettingsPanel && window.SettingsPanel.isDirty && window.SettingsPanel.isDirty() === false', timeoutMs, 100, 'settings save completed');
   // Poll until the synchronous host save changes the file. Waiting for a
   // particular optional section (such as models) made valid saves appear to

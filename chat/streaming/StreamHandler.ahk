@@ -110,6 +110,7 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
         }
         scope.params["_requestPath"] := requestPath
         _activeNonStreamRequests.Push(scope)
+        CodexCliTransport._Trace(scope, "ahk.nonstream.scope-created")
         ; The single-shot path is synchronous and is not tracked
         ; in _activeStreams - clear the current-stream marker so the
         ; _finalizeStreaming cleanup below does not remove another request's
@@ -117,11 +118,21 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
         _currentStreamKey := ""
         requestStartTime := A_TickCount
         providerInfo := ProviderResolver.Resolve(scope.params["singleAPIModelName"])
-        if !providerInfo.endpoint {
+        if providerInfo.transport = "http" && !providerInfo.endpoint {
             _RemoveNonStreamRequest(scope)
             _ShowEndpointError(providerInfo)
             return
         }
+        if providerInfo.transport = "codex-cli" {
+            _BeginCodexActivity(scope, providerInfo)
+            CodexCliTransport._Trace(scope, "ahk.codex.activity-started")
+            ; Return from WebMessageReceived(chatSend) before the blocking exec
+            ; so a later cancelStream WebView message can interrupt the timer thread.
+            SetTimer(_RunCodexNonStreamingRequest.Bind(scope, chatHistoryJSONRequest, providerInfo, requestStartTime), -1)
+            CodexCliTransport._Trace(scope, "ahk.codex.timer-scheduled")
+            return
+        }
+
         cURLCommand := CurlBuilder.Build(providerInfo, requestParams["chatHistoryJSONRequestFile"], requestParams["cURLOutputFile"])
         FileOpen(requestParams["cURLCommandFile"], "w", "UTF-8-RAW").Write(cURLCommand)
         Run(cURLCommand, , "Hide", &cURLPID)
@@ -163,6 +174,98 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
     }
 }
 
+_RunCodexNonStreamingRequest(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {
+    CodexCliTransport._Trace(scope, "ahk.codex.timer-fired")
+    try {
+        reasoning := scope.params.Has("reasoningOverride") ? scope.params["reasoningOverride"] : ""
+        webSearch := scope.params.Has("webSearch") && scope.params["webSearch"]
+        CodexCliTransport._Trace(scope, "ahk.codex.execute.begin")
+        codexResult := CodexCliTransport.ExecuteRequest(
+            providerInfo,
+            scope.params["chatHistoryJSONRequestFile"],
+            scope.params["cURLOutputFile"],
+            scope.params["cURLErrorFile"],
+            scope,
+            webSearch,
+            reasoning,
+            _PostCodexActivity.Bind(scope, providerInfo)
+        )
+        scope.cancelled := codexResult.cancelled
+        CodexCliTransport._Trace(scope, "ahk.codex.execute.returned", "cancelled=" (scope.cancelled ? "true" : "false"))
+        if codexResult.HasOwnProp("thoughtSummary") && codexResult.thoughtSummary != "" {
+            ; Normalize the live thought block to the exact public Codex
+            ; summary/commentary/tool trace that will be persisted.
+            _PostCodexActivity(scope, providerInfo, {
+                content: codexResult.thoughtSummary,
+                summary: "Thought Process",
+                replace: true,
+                kind: "reasoning"
+            })
+            scope.params["_codexReasoningSummary"] := codexResult.thoughtSummary
+        }
+        _RemoveNonStreamRequest(scope)
+        if scope.cancelled {
+            _DeleteToolLoopFiles(scope)
+            postWebMessage("streamCancelled", { threadId: scope.threadId })
+            if !_HasOtherActiveOperations("", "", scope)
+                postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+            return
+        }
+        CodexCliTransport._Trace(scope, "ahk.codex.response-processing.begin")
+        _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestStartTime)
+    } catch Error as e {
+        debugLog("Codex deferred request error: " e.Message "`n" e.Stack, "StreamHandler")
+        _RemoveNonStreamRequest(scope)
+        _DeleteToolLoopFiles(scope)
+        _PostChatError("Request failed: " e.Message, scope.threadId)
+        if !_HasOtherActiveOperations("", "", scope)
+            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+    }
+}
+
+; Codex exec is one-shot at the response boundary, but --json stdout is a live
+; lifecycle stream. Paint only provider-supplied public reasoning/commentary
+; and safe tool activity into the normal Thought Process block so users get
+; immediate feedback without exposing hidden reasoning or creating another turn.
+_BeginCodexActivity(scope, providerInfo) {
+    modelName := ModelParser.Sanitize(scope.params["singleAPIModelName"])
+    displayName := modelName
+    if scope.params.Has("activeAssistantId") && scope.params["activeAssistantId"] {
+        asst := AssistantRepo.GetFromSettings(scope.params["activeAssistantId"])
+        if asst && asst.name
+            displayName := asst.name
+    }
+    ; Do not invent a Thinking... line. The loading indicator remains until
+    ; Codex actually emits a public reasoning summary, commentary, or tool item.
+    postWebMessage("streamModelName", { name: displayName, provider: providerInfo.providerKey, threadId: scope.threadId })
+}
+
+_PostCodexActivity(scope, providerInfo, progress) {
+    if !IsObject(scope) || !IsObject(progress)
+        return
+    if scope.HasOwnProp("cancelled") && scope.cancelled
+        return
+    global providers
+    collapsed := false
+    if IsObject(providerInfo) && providers.Has(providerInfo.providerKey) {
+        p := providers[providerInfo.providerKey]
+        if p.HasOwnProp("collapseThinking")
+            collapsed := p.collapseThinking
+    }
+    data := {
+        content: progress.HasOwnProp("content") ? progress.content : "",
+        collapsed: collapsed,
+        kind: progress.HasOwnProp("kind") ? progress.kind : "reasoning",
+        replace: progress.HasOwnProp("replace") ? progress.replace : false,
+        threadId: scope.threadId
+    }
+    if progress.HasOwnProp("summary")
+        data.summary := progress.summary
+    if progress.HasOwnProp("searchCount")
+        data.searchCount := progress.searchCount
+    postWebMessage("streamReasoning", data)
+}
+
 _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {
     global requestParams
     visibleParams := requestParams
@@ -174,7 +277,7 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
         requestParams["_streamOutputFile"] := requestParams["cURLOutputFile"]
         requestParams["_streamLastPos"] := 0
         requestParams["_streamContent"] := ""
-        requestParams["_streamReasoning"] := ""
+        requestParams["_streamReasoning"] := requestParams.Has("_codexReasoningSummary") ? requestParams["_codexReasoningSummary"] : ""
         sanitizedModel := ModelParser.Sanitize(requestParams["singleAPIModelName"])
         requestParams["_streamModelName"] := sanitizedModel
         requestParams["_streamDisplayName"] := sanitizedModel
@@ -206,6 +309,7 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
             return
         }
         response := ResponseParser.ParseChatResponse(jsongo.Parse(raw))
+        CodexCliTransport._Trace(scope, "ahk.codex.synthetic-response.parsed", "chars=" StrLen(response.response))
         if response.toolCalls.Length {
             _handleNonStreamToolCalls(response.toolCalls, scope)
             return
@@ -220,6 +324,7 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
         if response.model != ""
             requestParams["_streamModelName"] := ModelParser.Sanitize(response.model)
         requestParams["_streamFirstTokenTime"] := A_TickCount
+        CodexCliTransport._Trace(scope, "ahk.codex.finalize.begin")
         _finalizeStreaming()
     } finally {
         requestParams := visibleParams

@@ -81,15 +81,15 @@ The biggest one is branching. Editing or retrying an earlier message creates ano
 Other chat features currently include:
 
 - Streaming responses with Markdown, syntax highlighting, math rendering, quote, copy, edit, retry, and export.
-- DeepSeek, OpenAI, Gemini, OpenRouter, and user-added OpenAI-compatible providers.
-- Per-chat model, reasoning, and temperature settings.
+- DeepSeek, OpenAI, Gemini, OpenRouter, the optional local Codex CLI backend, and user-added OpenAI-compatible providers.
+- Per-chat model and reasoning settings, plus temperature where the selected backend supports it.
 - Configurable assistants with their own system prompts.
 - Images, PDFs, scanned PDFs, DOCX, PPTX, XLSX, EPUB, text files, and a fairly long list of code formats as attachments.
 - Web search. DeepSeek can use its Responses API search path, while other providers can use Tavily.
 - Folders, trash, and real-time chat search.
 - Password-locked chats. This is an application-level lock, not encryption at rest. The exact security model is documented in [docs/locked-chats.md](docs/locked-chats.md).
 - Optional local backups.
-- A usage dashboard for token counts, estimated cost, response speed, and latency, with filtering and CSV export.
+- A usage dashboard for token counts, estimated API cost, response speed, and latency, with filtering and CSV export. Codex CLI turns show token usage but $0 API cost because they use the user's ChatGPT/Codex plan allowance instead of API billing.
 - An API log viewer for inspecting requests and responses when something behaves strangely.
 
 <p align="center">
@@ -106,7 +106,7 @@ The normal download is the latest [`AhkLLM.zip`](https://github.com/AmitTzah/ahk
 1. Download and extract `AhkLLM.zip` somewhere.
 2. Install [AutoHotkey v2.0.18 or later](https://www.autohotkey.com/download/ahk-v2.exe).
 3. Make sure the [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) is installed. Windows 11 normally already has it.
-4. Set the API key for whichever provider you want to use, or enter it later in Settings. If you just want to try AhkLLM without paying for API usage, see [Try AhkLLM for free](#try-ahkllm-for-free).
+4. Set the API key for whichever HTTP provider you want to use, or enter it later in Settings. Alternatively, users with ChatGPT/Codex access can install and sign in to the official Codex CLI separately; see [Codex CLI backend](docs/codex-cli.md). If you just want to try AhkLLM without paying for API usage, see [Try AhkLLM for free](#try-ahkllm-for-free).
 5. Run `Main.ahk`.
 
 If you want to run directly from source instead, clone the repository and follow the same steps.
@@ -153,6 +153,14 @@ User-added providers must expose an OpenAI-compatible Chat Completions endpoint 
 
 OpenRouter is intentionally handled per model: use the model settings **Lookup** action for an exact slug or provider/model ID. Its large catalog is not bulk-imported, and `openrouter/free` remains the built-in synthetic router model.
 
+### Codex CLI (ChatGPT subscription)
+
+AhkLLM includes a built-in `codex` provider that invokes the user's separately installed official Codex CLI locally. The user authenticates Codex directly with their own ChatGPT account; AhkLLM does not request or store an OpenAI API key for this provider.
+
+Open **Settings -> Providers -> Codex CLI (ChatGPT subscription)** and click **Check Codex** to verify the installed CLI version and ChatGPT login without invoking a model. Codex-backed turns consume your normal ChatGPT/Codex plan allowance and plan limits.
+
+See [docs/codex-cli.md](docs/codex-cli.md) for installation, the restricted LLM-only execution profile, supported capabilities, usage accounting, and troubleshooting.
+
 ## Try AhkLLM for free
 
 If you just want to try AhkLLM without paying for API usage, you can use OpenRouter's free model router. Create a free OpenRouter API key and set it as `OPENROUTER_API_KEY`, either through a Windows environment variable or from AhkLLM's provider settings.
@@ -177,6 +185,8 @@ Chats, settings, and attachments are stored locally under `%APPDATA%\AhkLLM\`. C
 AhkLLM has no telemetry.
 
 That does not mean your prompts stay on your machine. Selected text, prompts, screenshots, and attachments are sent to whichever model provider you configure when you make a request. Web search queries are also sent to the relevant search provider.
+
+For the Codex CLI backend, AhkLLM hands the active text conversation to the user's local Codex process, which communicates with OpenAI using that user's own Codex/ChatGPT authentication. AhkLLM does not read or proxy the Codex credential.
 
 API request/response logs and the diagnostic log are written under `%TEMP%` and can contain prompt or response data. Logging can be disabled in Settings.
 

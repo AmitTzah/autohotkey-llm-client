@@ -82,6 +82,39 @@ describe('populateCurrentSettings', () => {
         assert.ok(/settings\.temperature !== '' && settings\.temperature !== undefined/.test(src), 'hasTemp should use explicit empty checks');
     });
 
+    it('records AHK numeric false as unsupported temperature for Codex', () => {
+        const ctx = loadModule();
+        ctx.populateCurrentSettings({ model: 'codex/gpt-5.6-luna', systemMessage: '', reasoning: 'high', temperature: '', supportsTemperature: 0 });
+        assert.strictEqual(ctx.window._currentSettings.supportsTemperature, false);
+    });
+
+    it('hides the Temperature row for Codex and restores it for supported models', () => {
+        const ctx = loadModule();
+        const temperatureField = { style: { display: '' } };
+        const tempSlider = {
+            value: '1.0', disabled: false, title: '', parentElement: temperatureField,
+            classList: { add: () => {}, remove: () => {}, contains: () => false },
+            addEventListener: () => {}
+        };
+        const tempVal = { textContent: '1.0' };
+        const tempReset = { style: { display: '' }, addEventListener: () => {} };
+        const originalGet = ctx.document.getElementById;
+        ctx.document.getElementById = (id) => {
+            if (id === 'tempSlider') return tempSlider;
+            if (id === 'tempVal') return tempVal;
+            if (id === 'tempReset') return tempReset;
+            return originalGet(id);
+        };
+
+        ctx.populateCurrentSettings({ model: 'codex/gpt-5.6-luna', systemMessage: '', reasoning: 'high', temperature: '', supportsTemperature: 0 });
+        assert.strictEqual(temperatureField.style.display, 'none', 'Codex must not show an unsupported Temperature control');
+        assert.strictEqual(tempSlider.disabled, true, 'hidden unsupported Temperature control should remain disabled');
+
+        ctx.populateCurrentSettings({ model: 'openai/gpt-5-mini', systemMessage: '', reasoning: '', temperature: '', supportsTemperature: true });
+        assert.strictEqual(temperatureField.style.display, '', 'Temperature control should return for supported models');
+        assert.strictEqual(tempSlider.disabled, false);
+    });
+
     it('handles null settings gracefully', () => {
         const ctx = loadModule();
         assert.doesNotThrow(() => ctx.populateCurrentSettings(null));

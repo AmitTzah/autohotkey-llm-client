@@ -3,6 +3,7 @@
 // the production ten-second command timeout.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const vm = require('node:vm');
 const { CDP } = require('../../tests/headless/cdp');
 
 class FakeWebSocket {
@@ -70,5 +71,30 @@ describe('CDP transport failure handling', () => {
     await new Promise((resolve) => setImmediate(resolve));
     ws.emit('close');
     await assert.rejects(waiting, /CDP websocket closed/);
+  });
+
+  it('repairs the postMessage recorder when the diagnostics array survives but the wrapper is lost', async () => {
+    const delivered = [];
+    const nativePost = (message) => { delivered.push(message); };
+    const sandbox = {
+      window: { chrome: { webview: { postMessage: nativePost } } },
+      JSON
+    };
+    const cdp = Object.create(CDP.prototype);
+    cdp.eval = async (script) => vm.runInNewContext(script, sandbox);
+
+    await cdp.installPostMessageHook();
+    sandbox.window.chrome.webview.postMessage('first');
+    assert.deepEqual(Array.from(sandbox.window.__posted), ['first']);
+
+    // Simulate a document/host-object transition that leaves diagnostics state
+    // behind but replaces the wrapped WebView postMessage function.
+    sandbox.window.chrome.webview.postMessage = nativePost;
+    await cdp.installPostMessageHook();
+    sandbox.window.chrome.webview.postMessage('second');
+
+    assert.deepEqual(Array.from(sandbox.window.__posted), ['first', 'second']);
+    assert.deepEqual(delivered, ['first', 'second']);
+    assert.equal(sandbox.window.chrome.webview.postMessage.__ahkllmPostHook, true);
   });
 });

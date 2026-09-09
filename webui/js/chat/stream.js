@@ -6,6 +6,9 @@ var streamState = {
   contentDiv: null,
   thinkingDetails: null,
   thinkingBuffer: '',
+  thinkingKind: 'reasoning',
+  thinkingSummary: '',
+  activitySearchCount: 0,
   contentBuffer: '',
   modelName: '',
   provider: '',
@@ -27,6 +30,9 @@ function scrollToBottom() {
 
 // Start streaming - called automatically when first stream content/reasoning arrives
 function startStreaming() {
+  streamState.thinkingKind = 'reasoning';
+  streamState.thinkingSummary = '';
+  streamState.activitySearchCount = 0;
   streamState.active = true;
   streamState.contentBuffer = '';
   streamState.thinkingBuffer = '';
@@ -72,6 +78,12 @@ function onStreamContent(text, threadId) {
   // Update the content div with rendered markdown
   var rendered = md.render(streamState.contentBuffer);
   streamState.contentDiv.innerHTML = rendered;
+  if (typeof _latencyMarkOnce === 'function') {
+    _latencyMarkOnce('firstAnswerDom', 'web.first-answer-dom', 'source=streamContent');
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() {
+      _latencyMarkOnce('firstAnswerPaint', 'web.first-answer-painted', 'source=streamContent');
+    });
+  }
   scrollToBottom();
 }
 
@@ -83,21 +95,34 @@ function onStreamReasoning(data, threadId) {
 
   var text = typeof data === 'string' ? data : (data.content || '');
   var collapsed = (typeof data === 'object' && data.collapsed) || false;
+  var kind = (typeof data === 'object' && data.kind) ? data.kind : 'reasoning';
+  var replace = !!(typeof data === 'object' && data.replace);
+  streamState.thinkingKind = kind;
+  if (typeof data === 'object' && data.summary) streamState.thinkingSummary = data.summary;
+  if (typeof data === 'object' && data.searchCount !== undefined) streamState.activitySearchCount = data.searchCount;
 
-  streamState.thinkingBuffer += text;
+  streamState.thinkingBuffer = replace ? text : (streamState.thinkingBuffer + text);
 
   // Create the thinking details block if it doesn't exist
   if (!streamState.thinkingDetails) {
-    streamState.thinkingDetails = createThinkingBlock(collapsed);
+    streamState.thinkingDetails = createThinkingBlock(collapsed, kind);
   }
 
   // Update the thinking content
   var thinkingContent = streamState.thinkingDetails.querySelector('.thinking-content');
   thinkingContent.textContent = streamState.thinkingBuffer;
+  if (typeof _latencyMarkOnce === 'function') {
+    _latencyMarkOnce('firstReasoningDom', 'web.first-reasoning-dom');
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() {
+      _latencyMarkOnce('firstReasoningPaint', 'web.first-reasoning-painted');
+    });
+  }
 
   // Update the summary label with character count
   var summary = streamState.thinkingDetails.querySelector('summary');
-  summary.innerHTML = '<i data-lucide="brain" style="width:16px;height:16px;"></i> Thought Process <span class="thinking-pulse">⏳</span>';
+  var label = kind === 'activity' ? (streamState.thinkingSummary || 'Working') : 'Thought Process';
+  var icon = kind === 'activity' ? 'activity' : 'brain';
+  summary.innerHTML = '<i data-lucide="' + icon + '" style="width:16px;height:16px;"></i> ' + escHtml(label) + ' <span class="thinking-pulse">⏳</span>';
   if (typeof lucide !== 'undefined') lucide.createIcons();
 
   scrollToBottom();
@@ -164,6 +189,7 @@ function _streamBelongsToCurrentPath(dbMsg) {
 
 // Called when streaming is complete
 function onStreamDone(data) {
+  if (typeof _latencyMark === 'function') _latencyMark('web.stream-done-received');
   var modelName = typeof data === 'string' ? data : (data && data.model ? data.model : '');
   var displayName = (data && data.displayName) ? data.displayName : modelName;
   var dbMsg = (data && data.dbMsg) ? data.dbMsg : null;
@@ -181,6 +207,12 @@ function onStreamDone(data) {
 
   if (isCurrent) {
     _finalizeStreamBubble(displayName, modelName, dbMsg, provider);
+    // Codex activity can open a bubble before its one-shot final response.
+    // Populate that existing bubble from the persisted response instead of
+    // re-rendering the whole conversation after a long wait.
+    if (streamState.bubble && !streamState.contentBuffer && dbMsg && dbMsg.role === 'assistant' && dbMsg.content) {
+      streamState.contentBuffer = dbMsg.content;
+    }
     _finalizeThinkingBlock();
     _finalizeStreamContent();
   }
@@ -197,6 +229,14 @@ function onStreamDone(data) {
     // that row directly when no streaming chunks were received.
     _persistStreamedMessage(dbMsg.content || '', modelName, dbMsg);
     if (typeof renderChatMessages === 'function') renderChatMessages(chatMessages);
+  }
+
+  if (isCurrent && typeof _latencyMarkOnce === 'function') {
+    _latencyMarkOnce('firstAnswerDom', 'web.first-answer-dom', 'source=streamDone');
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() {
+      _latencyMarkOnce('firstAnswerPaint', 'web.first-answer-painted', 'source=streamDone');
+      if (typeof _latencyFinish === 'function') _latencyFinish('web.request.complete');
+    });
   }
 
   if (isCurrent) _updateUserTokenCount(data);
@@ -245,6 +285,26 @@ function _finalizeStreamBubble(displayName, modelName, dbMsg, provider) {
 
 function _finalizeThinkingBlock() {
   if (!streamState.thinkingDetails) return;
+
+  // Activity is a lifecycle/tool summary, not chain-of-thought. A plain
+  // Thinking indicator is transient; retain only useful completed tool work.
+  if (streamState.thinkingKind === 'activity') {
+    if (!streamState.activitySearchCount) {
+      if (streamState.thinkingDetails.remove) streamState.thinkingDetails.remove();
+      streamState.thinkingDetails = null;
+      streamState.thinkingBuffer = '';
+      return;
+    }
+    var activitySummary = streamState.thinkingDetails.querySelector('summary');
+    var countLabel = streamState.activitySearchCount === 1
+      ? '1 web search'
+      : streamState.activitySearchCount + ' web searches';
+    activitySummary.innerHTML = '<i data-lucide="search" style="width:16px;height:16px;"></i> ' + countLabel;
+    streamState.thinkingDetails.open = false;
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+    return;
+  }
+
   var summary = streamState.thinkingDetails.querySelector('summary');
   summary.innerHTML = streamState.thinkingBuffer.length > 0
     ? '<i data-lucide="brain" style="width:16px;height:16px;"></i> Thought (' + streamState.thinkingBuffer.length + ' chars)'
@@ -312,7 +372,7 @@ function createStreamingBubble() {
 // Nests the block INSIDE the streaming bubble (between label and content),
 // matching how createMessageBubble renders it. This ensures the thinking
 // block is removed when the bubble is removed — no orphaned DOM elements.
-function createThinkingBlock(collapsed) {
+function createThinkingBlock(collapsed, kind) {
   // Reasoning may arrive before the first content token. If no bubble
   // exists yet, create one so we have a parent to nest inside.
   if (!streamState.bubble) {
@@ -320,11 +380,13 @@ function createThinkingBlock(collapsed) {
   }
 
   var details = document.createElement('details');
-  details.className = 'thinking-block';
+  details.className = 'thinking-block' + (kind === 'activity' ? ' activity-block' : '');
   details.open = !collapsed;  // Collapsed by default for OpenAI/Gemini (useless summaries), expanded for DeepSeek
 
   var summary = document.createElement('summary');
-  summary.innerHTML = '<i data-lucide="brain" style="width:16px;height:16px;"></i> Thought Process <span class="thinking-pulse">⏳</span>';
+  var initialLabel = kind === 'activity' ? 'Working' : 'Thought Process';
+  var initialIcon = kind === 'activity' ? 'activity' : 'brain';
+  summary.innerHTML = '<i data-lucide="' + initialIcon + '" style="width:16px;height:16px;"></i> ' + initialLabel + ' <span class="thinking-pulse">⏳</span>';
   details.appendChild(summary);
 
   var content = document.createElement('div');
@@ -363,6 +425,7 @@ function handleStreamMessage(target, data) {
 
 // Update the streaming bubble's author to the actual model name as soon as it's known
 function onStreamModelName(modelName, threadId, provider) {
+  if (typeof _latencyMark === 'function') _latencyMark('web.stream-model-name-received', 'provider=' + (provider || ''));
   if (threadId && activeThreadId && threadId !== activeThreadId) return;
   if (!modelName) return;
   if (provider) streamState.provider = provider;

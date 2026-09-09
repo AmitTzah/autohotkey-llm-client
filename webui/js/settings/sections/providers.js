@@ -2,7 +2,7 @@
 (function() {
   var sectionName = 'providers';
   var S = window.SettingsShared;
-  var BUILTIN_PROVIDER_IDS = ['deepseek', 'openai', 'openrouter', 'google'];
+  var BUILTIN_PROVIDER_IDS = ['deepseek', 'openai', 'openrouter', 'google', 'codex'];
 
   function load(data) {
     if (!data || !data.providers) return;
@@ -72,6 +72,10 @@
     if (icon) icon.textContent = getInitials(name) || '?';
   }
 
+  function isCodexProvider(p, key) {
+    return key === 'codex' || (p && p.transport === 'codex-cli');
+  }
+
   function providerCardHTML(p, key, palIdx, isNew) {
     var colors = PALETTE[palIdx % PALETTE.length];
     var title = p.displayName || key || 'New Provider';
@@ -82,6 +86,18 @@
       : (isNew
         ? 'Stable lowercase ID used in model IDs (for example xiaomi/model-name). It cannot be renamed after saving.'
         : 'Stable ID used in model IDs. Existing provider IDs are read-only to avoid breaking model references.');
+    if (isCodexProvider(p, key)) {
+      return '<div class="provider-card-header"><div class="provider-icon" style="background:' + colors.bg + ';color:' + colors.fg + ';">' + S.escHtml(getInitials(title) || 'C') + '</div><span class="settings-fw-600 provider-card-title">' + S.escHtml(title) + '</span><span class="badge settings-ml-auto">Built-in local backend</span></div>' +
+        '<input type="hidden" value="codex-cli" data-field="transport">' +
+        '<input type="hidden" value="chatgpt-subscription" data-field="billingMode">' +
+        '<input type="hidden" value="chatgpt" data-field="authMode">' +
+        '<div class="field"><label class="field-label">Provider ID</label><input class="settings-mono-input" type="text" value="' + S.escHtml(key || 'codex') + '" data-field="providerId" readonly><div class="field-hint">Codex models use IDs such as <code>codex/gpt-5.6-luna</code>.</div></div>' +
+        '<div class="field"><label class="field-label">Display Name</label><input type="text" value="' + S.escHtml(p.displayName || 'Codex CLI (ChatGPT subscription)') + '" data-field="displayName"></div>' +
+        '<div class="field"><label class="field-label">Authentication</label><div class="field-hint">Uses the official Codex CLI installed on this PC and its existing ChatGPT login. AhkLLM does not store an OpenAI API key for this provider. Install Codex separately and run <code>codex login</code> if needed.</div></div>' +
+        '<div class="field"><label class="field-label">Codex status</label><div class="settings-flex-row-6"><button type="button" class="btn-sm check-codex">Check Codex</button><span class="codex-status settings-text-xs-muted" aria-live="polite">Not checked</span></div><div class="field-hint">Requires Codex CLI 0.153.0 or newer; AhkLLM is tested against 0.153.x and allows compatible newer releases. The check runs <code>codex --version</code> and <code>codex login status</code> only; it does not invoke a model or consume a Codex turn.</div></div>' +
+        '<div class="field"><label class="field-label">Execution profile</label><div class="field-hint">Normal AhkLLM chat disables known local execution/inspection and agent tool surfaces, with a read-only sandbox as a write backstop. The Web Search toggle uses Codex hosted web search inside the same Codex turn.</div></div>' +
+        '<div class="toggle-row"><div><div class="lbl">Collapse thinking blocks by default</div><div class="settings-text-xs-muted">Used when reasoning content is available</div></div><div class="switch' + (p.collapseThinking ? ' on' : '') + '" data-field="collapseThinking"><div class="knob"></div></div></div>';
+    }
     return '<div class="provider-card-header"><div class="provider-icon" style="background:' + colors.bg + ';color:' + colors.fg + ';">' + S.escHtml(getInitials(title) || '?') + '</div><span class="settings-fw-600 provider-card-title">' + S.escHtml(title) + '</span><button class="btn-sm danger settings-ml-auto">Remove</button></div>' +
       '<div class="field"><label class="field-label">Provider ID</label><input class="settings-mono-input" type="text" value="' + S.escHtml(key || '') + '" placeholder="xiaomi" data-field="providerId"' + idAttrs + '><div class="field-hint">' + idHint + '</div></div>' +
       '<div class="field"><label class="field-label">Display Name</label><input type="text" value="' + S.escHtml(p.displayName || '') + '" placeholder="Xiaomi" data-field="displayName"></div>' +
@@ -136,7 +152,8 @@
       });
     }
 
-    card.querySelector('.btn-sm.danger').addEventListener('click', function() {
+    var removeBtn = card.querySelector('.btn-sm.danger');
+    if (removeBtn) removeBtn.addEventListener('click', function() {
       if (grid.querySelectorAll('.provider-card').length <= 1) return;
       card.remove();
       mark();
@@ -148,6 +165,17 @@
       toggleBtn.addEventListener('click', function() {
         var keyInput = card.querySelector('[data-field="apiKey"]');
         if (keyInput) keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+      });
+    }
+
+    var checkCodexBtn = card.querySelector('.check-codex');
+    if (checkCodexBtn) {
+      checkCodexBtn.addEventListener('click', function() {
+        var statusEl = card.querySelector('.codex-status');
+        checkCodexBtn.disabled = true;
+        if (statusEl) statusEl.textContent = 'Checking...';
+        if (typeof Ipc !== 'undefined' && Ipc && typeof Ipc.postToHost === 'function')
+          Ipc.postToHost('checkCodex');
       });
     }
 
@@ -206,7 +234,18 @@
         if (el.classList.contains('switch')) obj[field] = el.classList.contains('on');
         else obj[field] = el.value || '';
       });
-      obj.authMode = (obj.apiKey && !obj.authEnvVar) ? 'direct' : 'env';
+      if (obj.transport === 'codex-cli') {
+        obj.authMode = 'chatgpt';
+        obj.billingMode = obj.billingMode || 'chatgpt-subscription';
+        obj.endpoint = '';
+        obj.fimEndpoint = '';
+        obj.authEnvVar = '';
+        obj.apiKey = '';
+      } else {
+        obj.transport = obj.transport || 'http';
+        obj.billingMode = obj.billingMode || 'api';
+        obj.authMode = (obj.apiKey && !obj.authEnvVar) ? 'direct' : 'env';
+      }
       obj.custom = card.dataset && card.dataset.customProvider === 'true';
       obj.prefixes = [];
       card.querySelectorAll('.prefix-tags .badge').forEach(function(tag) {
@@ -229,6 +268,23 @@
     });
     options.sort(function(a, b) { return a.label.localeCompare(b.label) || a.key.localeCompare(b.key); });
     return options;
+  }
+
+  function handleCodexStatus(data) {
+    data = data || {};
+    var cards = document.querySelectorAll('#providerGrid .provider-card');
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      var transportEl = _field(card, 'transport');
+      if (providerIdForCard(card) !== 'codex' && String(transportEl && transportEl.value || '') !== 'codex-cli') continue;
+      var statusEl = card.querySelector('.codex-status');
+      var button = card.querySelector('.check-codex');
+      if (button) button.disabled = false;
+      if (statusEl) {
+        statusEl.textContent = data.message || (data.authenticated ? 'Codex is ready.' : 'Codex is not ready.');
+        statusEl.title = data.error || '';
+      }
+    }
   }
 
   function save() {
@@ -258,6 +314,9 @@
       seen[key] = true;
       if (!name)
         return { valid: false, message: 'Provider "' + key + '" needs a display name.' };
+      var transportEl = _field(card, 'transport');
+      var transport = String(transportEl && transportEl.value || 'http').trim() || 'http';
+      if (transport === 'codex-cli') continue;
       if (!endpoint)
         return { valid: false, message: 'Provider "' + name + '" needs an OpenAI-compatible Chat Completions endpoint.' };
     }
@@ -286,7 +345,8 @@
     getCurrentProviders: collectProviders,
     getProviderOptions: getProviderOptions,
     providerIdForCard: providerIdForCard,
-    slugifyProviderId: slugifyProviderId
+    slugifyProviderId: slugifyProviderId,
+    handleCodexStatus: handleCodexStatus
   };
 
   if (typeof document !== 'undefined') {

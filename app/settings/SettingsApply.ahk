@@ -44,6 +44,8 @@ class SettingsApply {
                 endpoint: p.Has("endpoint") ? p["endpoint"] : "",
                 modelsDevProvider: p.Has("modelsDevProvider") ? p["modelsDevProvider"] : "",
                 fimEndpoint: p.Has("fimEndpoint") ? p["fimEndpoint"] : "",
+                transport: p.Has("transport") && p["transport"] != "" ? p["transport"] : "http",
+                billingMode: p.Has("billingMode") ? p["billingMode"] : "api",
                 authEnvVar: p.Has("authEnvVar") ? p["authEnvVar"] : "",
                 authMode: p.Has("authMode") ? p["authMode"] : "env",
                 apiKey: p.Has("apiKey") ? p["apiKey"] : "",

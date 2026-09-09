@@ -38,6 +38,10 @@ function _sendAllSettings(immediate) {
   }, 300);
 }
 
+function _supportsTemperatureValue(value) {
+  return !(value === false || value === 0 || value === '0' || value === 'false');
+}
+
 function _updateModelCard() {
   var s = window._currentSettings || {};
   var card = document.getElementById('modelCardTrigger');
@@ -234,13 +238,13 @@ function _populateModelsTab() {
           '<div class="si-desc">' + escHtml(provider) + '</div>' +
         '</div>' +
         '<div class="si-radio"></div>';
-      mItem.addEventListener('click', _makeModelClickHandler(mItem, model.fullId));
+      mItem.addEventListener('click', _makeModelClickHandler(mItem, model.fullId, model.supportsTemperature));
       pane.appendChild(mItem);
     }
   }
 }
 
-function _makeModelClickHandler(el, fullId) {
+function _makeModelClickHandler(el, fullId, supportsTemperature) {
     return function() {
         var allItems = document.querySelectorAll('#tab-models .selector-item');
         for (var si = 0; si < allItems.length; si++) allItems[si].classList.remove('active');
@@ -259,6 +263,15 @@ function _makeModelClickHandler(el, fullId) {
         window._currentSettings.temperature = '';
         window._currentSettings.reasoningOverrideSet = window._currentSettings.reasoning !== '';
         window._currentSettings.temperatureOverrideSet = false;
+        var temperatureSupported = _supportsTemperatureValue(supportsTemperature);
+        window._currentSettings.supportsTemperature = temperatureSupported;
+        var tempSlider = document.getElementById('tempSlider');
+        if (tempSlider) {
+            var tempField = tempSlider.parentElement;
+            if (tempField) tempField.style.display = temperatureSupported ? '' : 'none';
+            tempSlider.disabled = !temperatureSupported;
+            tempSlider.title = temperatureSupported ? '' : 'Temperature is not supported by the Codex CLI backend.';
+        }
         _sendAllSettings();
         _updateModelCard();
         var pop = document.getElementById('modelPopover'); if (pop) pop.classList.remove('open');

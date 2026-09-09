@@ -74,7 +74,8 @@ temporary directory could not be removed.
 | File | Purpose |
 |---|---|
 | `cdp.js` | Minimal CDP client with command timeouts and socket-close rejection |
-| `mock-llm-server.js` | Local deterministic fake LLM and search backends |
+| `mock-llm-server.js` | Local deterministic fake HTTP LLM and search backends |
+| `fake-codex-cli.js` | Deterministic Codex CLI stand-in used by real-app Codex transport scenarios |
 | `seed.js` | Writes settings and creates/seeds SQLite fixtures |
 | `launch.js` | Explicit worker sandbox launch, CDP discovery, and marker-scoped process cleanup |
 | `probe.ahk` | Worker-aware Win32/window/process probes and Main-to-ChatWindow IPC probes |

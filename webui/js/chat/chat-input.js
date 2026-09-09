@@ -13,6 +13,38 @@ var _retryRemovedMessages = null;
 var _retryThreadId = null;
 var _retryAnchorId = null;
 
+// Correlated Send -> first-visible-response latency trace. Browser timings use
+// performance.now() so they are monotonic; the trace id is forwarded to AHK so
+// backend debug-log stages can be matched without logging prompt contents.
+var _latencyTraceSeq = 0;
+var _latencyTraceActive = null;
+function _latencyNow() {
+  return (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') ? performance.now() : Date.now();
+}
+function _latencyStartTrace() {
+  var id = 'send-' + Date.now().toString(36) + '-' + (++_latencyTraceSeq);
+  _latencyTraceActive = { id: id, startPerf: _latencyNow(), marks: Object.create(null) };
+  window.__latencyTrace = _latencyTraceActive;
+  console.info('[LATENCY][' + id + '] +0.0ms web.send.begin');
+  return _latencyTraceActive;
+}
+function _latencyMark(stage, detail) {
+  if (!_latencyTraceActive) return;
+  var elapsed = _latencyNow() - _latencyTraceActive.startPerf;
+  console.info('[LATENCY][' + _latencyTraceActive.id + '] +' + elapsed.toFixed(1) + 'ms ' + stage + (detail ? ' ' + detail : ''));
+}
+function _latencyMarkOnce(key, stage, detail) {
+  if (!_latencyTraceActive || _latencyTraceActive.marks[key]) return;
+  _latencyTraceActive.marks[key] = true;
+  _latencyMark(stage, detail);
+}
+function _latencyFinish(stage) {
+  if (!_latencyTraceActive) return;
+  _latencyMark(stage || 'web.request.complete');
+  window.__lastLatencyTrace = _latencyTraceActive;
+  _latencyTraceActive = null;
+}
+
 function onChatSend() {
   var input = document.getElementById('chat-input');
   if (!input) return;
@@ -43,7 +75,11 @@ function onChatSend() {
 
   if (message || attachments.length > 0) {
     // Normal send with typed text and/or attachments
-    if (typeof _sendAllSettings === 'function') _sendAllSettings(true);
+    var latencyTrace = _latencyStartTrace();
+    if (typeof _sendAllSettings === 'function') {
+      _sendAllSettings(true);
+      _latencyMark('web.settings.flush-returned');
+    }
     input.value = '';
     input.style.height = 'auto';
     isLoading = true;
@@ -53,7 +89,9 @@ function onChatSend() {
     input.disabled = true;
     var payload = { message: message || 'Describe the attached content.' };
     if (attachments.length > 0) payload.attachments = attachments;
+    payload.latencyTraceId = latencyTrace.id;
     Ipc.postToHost('chatSend', payload);
+    _latencyMark('web.chatSend.posted');
     if (typeof clearAttachments === 'function') clearAttachments();
     return;
   }

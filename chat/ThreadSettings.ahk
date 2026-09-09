@@ -139,6 +139,7 @@ class ThreadSettings {
         thinkingLevels := []
         ; Resolve both full and short model ids for right-rail thinking levels.
         modelMeta := ModelResolver.Lookup(models, model)
+        supportsTemperature := !(IsObject(modelMeta) && modelMeta.HasOwnProp("api") && modelMeta.api = "codex-cli")
         if IsObject(modelMeta) && modelMeta.HasOwnProp("thinkingLevelMap") && IsObject(modelMeta.thinkingLevelMap) {
             for level in modelMeta.thinkingLevelMap
                 thinkingLevels.Push(level)
@@ -157,7 +158,8 @@ class ThreadSettings {
             assistantName: assistantName,
             assistantBaseModel: assistantBaseModel,
             assistantDescription: assistantDescription,
-            thinkingLevels: thinkingLevels
+            thinkingLevels: thinkingLevels,
+            supportsTemperature: supportsTemperature
         }
     }
 }

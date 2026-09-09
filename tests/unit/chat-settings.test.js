@@ -197,6 +197,26 @@ describe('_makeModelClickHandler — keeps reasoning, clears assistant overrides
         assert.strictEqual(ctx.window._currentSettings.reasoning, 'medium', 'the selected reasoning level must survive a model-to-model switch');
         assert.strictEqual(ctx.window._currentSettings.temperature, '');
     });
+
+    it('hides temperature synchronously for a model that does not support it and restores it for supported models', () => {
+        const ctx = loadSettingsModule();
+        const tempField = { style: { display: '' } };
+        const tempSlider = { parentElement: tempField, disabled: false, title: '' };
+        ctx.document.getElementById = (id) => id === 'tempSlider' ? tempSlider : null;
+        ctx.window._currentSettings = { model: 'deepseek/deepseek-v4-flash', reasoning: '', temperature: '', assistantName: '' };
+        const mockEl = { classList: { add: function() {} } };
+
+        assert.strictEqual(ctx._supportsTemperatureValue(0), false, 'AHK numeric false must mean unsupported');
+        ctx._makeModelClickHandler(mockEl, 'codex/gpt-5.6-luna', 0)();
+        assert.strictEqual(ctx.window._currentSettings.supportsTemperature, false);
+        assert.strictEqual(tempField.style.display, 'none', 'Codex selection should hide the Temperature row immediately');
+        assert.strictEqual(tempSlider.disabled, true);
+
+        ctx._makeModelClickHandler(mockEl, 'deepseek/deepseek-v4-flash', true)();
+        assert.strictEqual(ctx.window._currentSettings.supportsTemperature, true);
+        assert.strictEqual(tempField.style.display, '', 'switching back should restore the Temperature row immediately');
+        assert.strictEqual(tempSlider.disabled, false);
+    });
 });
 
 describe('_makeAssistantClickHandler — updates mode before posting', () => {

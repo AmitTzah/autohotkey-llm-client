@@ -214,7 +214,7 @@ function preflight() {
 }
 
 // Launch the app with an isolated environment. Returns { mainPid, port, cdpBase }.
-function launch({ sandbox, port, workerId = '', mainScript = MAIN_AHK }) {
+function launch({ sandbox, port, workerId = '', mainScript = MAIN_AHK, envOverrides = null }) {
   const worker = workerId ? sanitizeWorkerId(workerId) : '';
   activeWebView2Dir = path.join(os.tmpdir(), 'llm-webview2-' + (worker ? worker + '-' : '') + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
   const env = Object.assign({}, process.env, {
@@ -224,6 +224,7 @@ function launch({ sandbox, port, workerId = '', mainScript = MAIN_AHK }) {
     OPENAI_API_KEY: 'sk-headless-test',
     GOOGLE_API_KEY: 'sk-headless-test'
   });
+  if (envOverrides) Object.assign(env, envOverrides);
   if (sandbox) env.AHKLLM_E2E_DATA_DIR = sandbox;
   if (worker) env.AHKLLM_E2E_WORKER = worker;
   const args = ['/ErrorStdOut', mainScript];

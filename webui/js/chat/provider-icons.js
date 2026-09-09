@@ -12,6 +12,7 @@
   var files = {
     deepseek: '../icons/deepseek.ico',
     openai: '../icons/openai.ico',
+    codex: '../icons/openai.ico',
     anthropic: '../icons/anthropic.ico',
     google: '../icons/google.ico',
     perplexity: '../icons/perplexity.ico',

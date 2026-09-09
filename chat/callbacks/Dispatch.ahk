@@ -82,6 +82,8 @@ OnWebMessageReceived(sender, args) {
                 _HandleRefreshModelPricing(parsed)
             case "lookupOpenRouterModel":
                 _HandleOpenRouterModelLookup(parsed)
+            case "checkCodex":
+                _HandleCheckCodex()
             case "reloadScript":
                 CustomMessages.notifyReloadMain(requestParams["mainScriptHiddenHwnd"])
             case "browseIcon":
@@ -182,6 +184,11 @@ _HandleRequestAllSettings() {
 
 ; Send raw defaults (not merged with loaded) to WebView for Reset button.
 ; Also saves the defaults immediately so the chat process reloads fresh model data.
+_HandleCheckCodex() {
+    status := CodexCliTransport.CheckStatus()
+    postWebMessage("codexStatus", status)
+}
+
 _HandleRequestDefaultSettings() {
     defaults := SettingsHandler.GetDefaults()
     ; Save and apply defaults immediately — bypass merge with stale loaded data
@@ -239,6 +246,8 @@ _BuildModelsDevCatalogConfig(providerData) {
     spec := ""
     config := Map()
     for providerKey, p in providersMap {
+        if p.Get("transport", "http") != "http"
+            continue
         providerKey := Trim(providerKey)
         if !RegExMatch(providerKey, "^[a-z0-9][a-z0-9._-]*$")
             throw Error("Invalid provider ID for models.dev refresh: " providerKey)

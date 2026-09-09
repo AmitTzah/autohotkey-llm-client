@@ -36,6 +36,7 @@ const scenarios = [].concat(
   require('./scenarios/settings'),
   require('./scenarios/usage-tokens'),
   require('./scenarios/chat-ui'),
+  require('./scenarios/codex-cli'),
   require('./scenarios/search-tools'),
   require('./scenarios/misc'),
   require('./scenarios/chat-locks'),
@@ -295,11 +296,15 @@ async function runScenario(sc, worker) {
       port = await launcher.findFreePort();
       worker.currentPort = port;
       stage('launch-main');
+      const envOverrides = typeof sc.launchEnv === 'function'
+        ? (sc.launchEnv({ dataDir, endpoint, workerId: worker.workerId }) || {})
+        : (sc.launchEnv || {});
       const launched = launcher.launch({
         sandbox: worker.sandboxData,
         port,
         workerId: worker.workerId,
-        mainScript: worker.mainScript
+        mainScript: worker.mainScript,
+        envOverrides
       });
       mainPid = launched.mainPid;
       detail.port = port;
@@ -313,6 +318,12 @@ async function runScenario(sc, worker) {
       await cdp.waitFor('document.readyState === "complete" && typeof chatMessages !== "undefined"', 60000, 100, 'chat page ready');
       stage('wait-send-wiring');
       await cdp.waitFor('document.getElementById("chat-send-btn") && document.getElementById("chat-send-btn").onclick !== null', 30000, 100, 'send button wired');
+      // The first hook can be installed on WebView2's provisional/initial
+      // document if CDP attaches before the final chat navigation completes.
+      // Re-install after the real page and handlers are ready so scenario
+      // assertions observe the same postMessage calls that AHK receives.
+      stage('reinstall-cdp-hook');
+      await cdp.installPostMessageHook();
     }
 
     stage('scenario-body');

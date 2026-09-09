@@ -1,6 +1,7 @@
 #Requires AutoHotkey v2.0.18+
 #Include ..\default-settings\DefaultSettings.ahk        ; App defaults (fallback for settings.json)
 #Include ..\default-settings\DefaultModels.ahk          ; Auto-generated model metadata
+#Include ..\default-settings\DefaultCodexModels.ahk     ; Curated ChatGPT/Codex CLI models
 #Include ..\app\settings\SettingsPersistence.ahk
 #Include ..\app\settings\SettingsDefaults.ahk
 #Include ..\app\settings\SettingsMerge.ahk
@@ -27,6 +28,8 @@ DetectHiddenWindows true            ; Enables detection of hidden windows for in
 ; Application classes
 #Include ..\api\CurlBuilder.ahk
 #Include ..\api\CurlExecutor.ahk
+#Include ..\api\CodexCliRuntime.ahk
+#Include ..\api\CodexCliTransport.ahk
 #Include ..\api\ProviderResolver.ahk
 #Include ..\api\ResponseParser.ahk
 #Include ..\api\LLMRequestBuilder.ahk

@@ -238,7 +238,8 @@ postAssistantsToWebView() {
                 fullId: modelId,
                 name: modelData.HasOwnProp("displayName") ? modelData.displayName : shortName,
                 reasoning: modelData.HasOwnProp("reasoning") ? modelData.reasoning : false,
-                vision: modelData.HasOwnProp("vision") ? modelData.vision : false
+                vision: modelData.HasOwnProp("vision") ? modelData.vision : false,
+                supportsTemperature: !(modelData.HasOwnProp("api") && modelData.api = "codex-cli")
             })
         }
     }

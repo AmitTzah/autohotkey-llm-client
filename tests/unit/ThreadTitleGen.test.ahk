@@ -165,6 +165,43 @@ class ThreadTitleGenTest {
     ; generateThreadTitle twice (e.g. a direct call plus a duplicate timer
     ; scheduled before the first fired) must dispatch exactly one API call.
     ; ----------------------------------------------------
+    Generate_Codex_UsesLocalFallbackWithoutCliTurn() {
+        global titleGenModel, _mockRunCalls, providers
+        this._setupDb()
+        this._setGlobals()
+        titleGenModel := "codex/gpt-5.6-luna"
+        hadCodex := providers.Has("codex")
+        oldCodex := hadCodex ? providers["codex"] : ""
+        providers["codex"] := { displayName: "Codex", endpoint: "", fimEndpoint: "", transport: "codex-cli", authMode: "chatgpt", billingMode: "chatgpt-subscription" }
+        threadId := ChatDB.Thread_Create("New Chat")
+        usrId := ChatDB.Msg_Insert({ thread_id: threadId, role: "user", content: "Please compare the two implementation approaches and explain which one is safer for a Windows desktop application." })
+        ChatDB.Msg_Insert({ thread_id: threadId, role: "assistant", content: "Here is the comparison.", parent_id: usrId })
+        _mockRunCalls := []
+        web := this._captureWebView()
+        try {
+            generateThreadTitle(threadId)
+        } finally {
+            web.restore()
+            if hadCodex
+                providers["codex"] := oldCodex
+            else
+                providers.Delete("codex")
+        }
+        if _mockRunCalls.Length != 0
+            throw Error("Codex auto-title must not launch a hidden CLI/model turn")
+        title := ""
+        for t in ChatDB.Thread_List() {
+            if t.id = threadId
+                title := t.title
+        }
+        if title = "New Chat" || InStr(title, "Please compare") != 1 || StrLen(title) > 60
+            throw Error("Codex local title fallback was not deterministic/short: '" title "'")
+        usage := ChatDB.Usage_Query(Map("timeRange", "all", "model", "", "type", "command"))
+        if usage.commands.Length != 0
+            throw Error("Local Codex title fallback must not record a model/API request")
+        this._teardownDb()
+    }
+
     Generate_CalledTwice_FiresOneRequest() {
         global _mockTitleGenOutput, _mockRunCalls
         this._setupDb()

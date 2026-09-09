@@ -625,7 +625,7 @@ class StreamHandlerTest {
         fnPos := InStr(src, "_BuildAndFireRequest() {")
         if !fnPos
             throw Error("_BuildAndFireRequest not found in ChatRequestBuilder.ahk")
-        block := SubStr(src, fnPos, 1400)
+        block := SubStr(src, fnPos, 2400)
         ; The deletes are inlined (a helper call would be an unresolved
         ; identifier when ChatRequestBuilder.ahk is #Included by the headless
         ; DB-audit probe without the chat-process modules).
@@ -768,6 +768,24 @@ class StreamHandlerTest {
             _activeToolLoops := oldLoops
             _activeNonStreamRequests := oldRequests
         }
+    }
+
+    CodexNonStreamingRequest_DefersBlockingExecOffWebMessageCallback() {
+        srcPath := A_ScriptDir "\\..\\chat\\streaming\\StreamHandler.ahk"
+        src := FileRead(srcPath)
+        schedulePos := InStr(src, "SetTimer(_RunCodexNonStreamingRequest.Bind(")
+        helperPos := InStr(src, "_RunCodexNonStreamingRequest(scope, chatHistoryJSONRequest, providerInfo, requestStartTime)")
+        execPos := InStr(src, "CodexCliTransport.ExecuteRequest(", false, helperPos)
+        if !schedulePos || !helperPos || !execPos
+            throw Error("Codex chat path must defer the blocking exec through the captured non-stream request scope")
+        if schedulePos > helperPos
+            throw Error("Codex timer scheduling must occur before the deferred execution helper")
+        branchText := SubStr(src, schedulePos, helperPos - schedulePos)
+        if InStr(branchText, "CodexCliTransport.ExecuteRequest(")
+            throw Error("Codex exec must not run inline inside the WebView chatSend callback")
+        helperText := SubStr(src, helperPos, 2200)
+        if !InStr(helperText, "scope.params[") || !InStr(helperText, "streamCancelled")
+            throw Error("Deferred Codex execution must use captured request paths and retain scoped cancellation cleanup")
     }
 
     RequestPath_CleansAndRestoresByStreamOwnership() {

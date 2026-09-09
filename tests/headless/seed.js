@@ -154,7 +154,11 @@ function query(dbPath, sql, params = []) {
 function daysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().substring(0, 10);
+  // Usage dates are local-calendar keys. Converting through toISOString()
+  // shifts midnight-adjacent fixtures backward in UTC+x zones.
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + month + '-' + day;
 }
 
 module.exports = { writeSettings, createDb, query, uuid, daysAgo };

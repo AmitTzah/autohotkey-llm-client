@@ -90,7 +90,7 @@ class InlineRequestRunner {
         if isFIM {
             cURLCommand := CurlBuilder.BuildFIM(providerInfo, requestFile, outputFile)
         } else {
-            cURLCommand := CurlBuilder.Build(providerInfo, requestFile, outputFile)
+            cURLCommand := providerInfo.transport = "codex-cli" ? "codex-cli" : CurlBuilder.Build(providerInfo, requestFile, outputFile)
         }
         FileOpen(curlFile, "w", "UTF-8-RAW").Write(cURLCommand)
 
@@ -100,7 +100,12 @@ class InlineRequestRunner {
             curlFile: curlFile,
             outputFile: outputFile,
             errorFile: errorFile,
-            endpoint: providerInfo.endpoint
+            endpoint: providerInfo.transport = "codex-cli" ? "local:codex-cli" : providerInfo.endpoint,
+            transport: providerInfo.transport,
+            providerInfo: providerInfo,
+            reasoning: thinking = "enabled"
+                ? (thinkingLevel != "" ? thinkingLevel : "medium")
+                : (thinking = "disabled" ? (thinkingLevel != "" ? thinkingLevel : "none") : "")
         }
     }
 
@@ -109,6 +114,35 @@ class InlineRequestRunner {
     ; Returns { success: true/false, response: parsedResponse, rawJSON: rawResponseText }
     static _ExecuteCurlAndParse(files, isFIM, cancelState := "") {
         requestStartTime := A_TickCount
+        if files.transport = "codex-cli" {
+            codexResult := CodexCliTransport.ExecuteRequest(
+                files.providerInfo,
+                files.requestFile,
+                files.outputFile,
+                files.errorFile,
+                cancelState,
+                false,
+                files.reasoning
+            )
+            JSONResponseFromLLM := FileExist(files.outputFile)
+                ? FileOpen(files.outputFile, "r", "UTF-8-RAW").Read()
+                : ""
+            wasCancelled := codexResult.cancelled
+            responseFromLLM := ""
+            if !wasCancelled && JSONResponseFromLLM != "" {
+                try responseFromLLM := ResponseParser.ParseChatResponse(jsongo.Parse(JSONResponseFromLLM))
+                catch Error as e
+                    debugLog("Failed to parse Codex response: " e.Message, "InlineRequestRunner")
+            }
+            return {
+                success: !wasCancelled && IsObject(responseFromLLM) && responseFromLLM.HasProp("response"),
+                cancelled: wasCancelled,
+                response: responseFromLLM,
+                rawJSON: JSONResponseFromLLM,
+                responseTimeMs: A_TickCount - requestStartTime
+            }
+        }
+
         cURLCommand := FileOpen(files.curlFile, "r", "UTF-8-RAW").Read()
         ; Poll quickly enough that a normal Escape tap is not missed.
         JSONResponseFromLLM := CurlExecutor.Run(cURLCommand, files.outputFile, 25, cancelState)

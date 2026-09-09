@@ -175,7 +175,7 @@ class ChatRequestBuilderTest {
         this._setupDb()
         oldParams := requestParams
         requestParams := Map("stream", true)
-        providerInfo := { endpoint: "https://api.test/chat", apiKey: "test-key", providerKey: "openai" }
+        providerInfo := { endpoint: "https://api.test/chat", apiKey: "test-key", providerKey: "openai", transport: "http" }
         requestObj := { model: "openai/gpt-5-mini", messages: [] }
         try {
             firstId := ChatDB._UUID()

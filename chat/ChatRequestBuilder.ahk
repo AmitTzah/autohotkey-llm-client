@@ -45,13 +45,13 @@ buildRequest(requestPath := "") {
     providerInfo := ProviderResolver.Resolve(requestParams["singleAPIModelName"])
 
     ; Validate: check API key is available for the selected provider
-    if !providerInfo.apiKey {
+    if providerInfo.transport = "http" && !providerInfo.apiKey {
         return _ShowApiKeyError(providerInfo)
     }
 
     ; A provider with no endpoint would produce a URL-less cURL
     ; command - surface a friendly error instead of raw cURL stderr.
-    if !providerInfo.endpoint {
+    if providerInfo.transport = "http" && !providerInfo.endpoint {
         return _ShowEndpointError(providerInfo)
     }
 
@@ -255,7 +255,7 @@ _BuildRequestObj(apiMessages, providerInfo) {
         OpenAIChatCompletions.ApplyThinking(&requestObj, modelMeta, reasoning, requestParams["singleAPIModelName"])
 
     ; Apply temperature override (use != "" not truthiness — "0" is falsy in AHK)
-    if requestParams.Has("temperatureOverride") && requestParams["temperatureOverride"] != "" {
+    if providerInfo.transport != "codex-cli" && requestParams.Has("temperatureOverride") && requestParams["temperatureOverride"] != "" {
         try {
             requestObj.temperature := Float(requestParams["temperatureOverride"])
         } catch {
@@ -273,7 +273,7 @@ _BuildRequestObj(apiMessages, providerInfo) {
     ; The search backend is resolved at execution time (DeepSeek native vs
     ; Tavily) — the request format is the same OpenAI-compatible function tool
     ; for every provider.
-    if SearchTools.Enabled() {
+    if SearchTools.Enabled() && providerInfo.transport != "codex-cli" {
         requestObj.tools := [SearchTools.Definition()]
     }
 
@@ -311,10 +311,16 @@ _WriteRequestFiles(requestObj, providerInfo) {
     errorFile := A_Temp "\ChatWindow_Err_" uniqueID ".txt"
 
     FileOpen(requestFile, "w", "UTF-8-RAW").Write(payload)
+    if providerInfo.transport = "codex-cli" {
+        ; Codex is a local process transport. Preserve the normal request file
+        ; as the transport-neutral handoff, but do not manufacture a URL/cURL.
+        cURLCommand := "codex-cli"
+    } else {
     if requestParams["stream"] {
         cURLCommand := CurlBuilder.BuildStream(providerInfo, requestFile, outputFile, errorFile)
     } else {
         cURLCommand := CurlBuilder.Build(providerInfo, requestFile, outputFile)
+    }
     }
     FileOpen(cURLFile, "w", "UTF-8-RAW").Write(cURLCommand)
 
@@ -327,6 +333,13 @@ _WriteRequestFiles(requestObj, providerInfo) {
 }
 
 sendRequestToLLM(&chatHistoryJSONRequest, initialRequest := false) {
+    providerInfo := ProviderResolver.Resolve(requestParams["singleAPIModelName"])
+    if providerInfo.transport = "codex-cli" {
+        ; One AhkLLM Send -> one codex exec. Native web search, if enabled,
+        ; stays inside that same local Codex turn.
+        sendNonStreamingRequest(&chatHistoryJSONRequest)
+        return
+    }
     ; A chat-mode command with "Stream Response" off uses the
     ; single-shot JSON path (CurlBuilder.Build + ResponseParser), not the SSE
     ; stream handler - otherwise a JSON-only API response is dropped as an SSE
@@ -376,8 +389,22 @@ _RestoreFailedRetryLeaf() {
 ; Build request, fire to LLM, handle errors. Replaces 5 duplicate call sites.
 _BuildAndFireRequest() {
     try {
+    ; Streaming requests are built through the shared requestParams window.
+    ; Another active stream's poll timer also swaps that window to its own
+    ; temp paths/state. Keep build -> stream registration non-interruptible so
+    ; the existing stream cannot clobber the new command before it owns a
+    ; per-request stream record. Non-streaming/Codex dispatch stays interruptible.
+    criticalDispatch := requestParams.Has("stream") && requestParams["stream"]
+    if criticalDispatch
+        Critical "On"
+    if requestParams.Has("_latencyTraceId")
+        debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.buildRequest.begin", "Latency")
     chatHistoryJSONRequest := buildRequest()
+    if requestParams.Has("_latencyTraceId")
+        debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.buildRequest.returned", "Latency")
     if !chatHistoryJSONRequest {
+        if criticalDispatch
+            Critical "Off"
         if !_HasActiveOperationForUi()
             postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
         ; A retry rejected before any stream (vision gate, API-key
@@ -397,9 +424,17 @@ _BuildAndFireRequest() {
     }
     postWebMessage("setChatButtonsEnabled", false)
     startLoadingCursor(true)
+    if requestParams.Has("_latencyTraceId")
+        debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.sendRequestToLLM.begin", "Latency")
     sendRequestToLLM(&chatHistoryJSONRequest)
+    if requestParams.Has("_latencyTraceId")
+        debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.sendRequestToLLM.returned", "Latency")
+    if criticalDispatch
+        Critical "Off"
     return true
     } catch Error as e {
+        if criticalDispatch
+            Critical "Off"
         debugLog("_BuildAndFireRequest error: " e.Message "`n" e.Stack, "ErrorHandler")
         _RestoreFailedRetryLeaf()
         _PostChatError("Request failed: " e.Message)

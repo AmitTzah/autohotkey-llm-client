@@ -164,13 +164,16 @@ class CDP {
   // Install a hook that records every chrome.webview.postMessage call.
   async installPostMessageHook() {
     await this.eval(`(() => {
-      if (window.__posted) return;
-      window.__posted = [];
-      const orig = window.chrome.webview.postMessage.bind(window.chrome.webview);
-      window.chrome.webview.postMessage = (m) => {
+      if (!window.__posted) window.__posted = [];
+      const current = window.chrome.webview.postMessage;
+      if (current && current.__ahkllmPostHook) return;
+      const orig = current.bind(window.chrome.webview);
+      const wrapped = (m) => {
         window.__posted.push(typeof m === 'string' ? m : JSON.stringify(m));
         return orig(m);
       };
+      wrapped.__ahkllmPostHook = true;
+      window.chrome.webview.postMessage = wrapped;
     })()`);
   }
 

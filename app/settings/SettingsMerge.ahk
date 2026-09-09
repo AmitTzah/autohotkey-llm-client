@@ -20,8 +20,21 @@ class SettingsMerge {
                     ; otherwise a removed default model/provider is resurrected
                     ; by the deep merge on every load. Entries still present get
                     ; their missing fields filled from defaults below.
-                    if k = "models" || k = "providers"
+                    if k = "models" || k = "providers" {
                         result[k] := SettingsMerge.MergeAuthoritativeList(existingVal, defaultVal)
+                        ; Codex CLI is a built-in transport introduced after many
+                        ; users already had authoritative saved provider/model lists.
+                        ; Inject only Codex entries so removals of all other defaults
+                        ; remain authoritative.
+                        if k = "providers" && defaultVal.Has("codex") && !result[k].Has("codex")
+                            result[k]["codex"] := SettingsDefaults._DeepClone(defaultVal["codex"])
+                        if k = "models" {
+                            for defaultId, defaultModel in defaultVal {
+                                if !result[k].Has(defaultId) && IsObject(defaultModel) && defaultModel.Has("provider") && defaultModel["provider"] = "codex"
+                                    result[k][defaultId] := SettingsDefaults._DeepClone(defaultModel)
+                            }
+                        }
+                    }
                     else
                         result[k] := SettingsMerge.Merge(existingVal, defaultVal)
                 } else {

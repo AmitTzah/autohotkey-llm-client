@@ -125,6 +125,7 @@ RegisterTestClass(className) {
 #Include unit\SearchToolExecutor.test.ahk
 #Include unit\CustomMessages.test.ahk
 #Include unit\InlineRequestRunner.test.ahk
+#Include unit\CodexCliTransport.test.ahk
 #Include unit\ModelParser.test.ahk
 #Include unit\ModelPricingParser.test.ahk
 #Include unit\ChatSettings.test.ahk

@@ -43,6 +43,20 @@ generateThreadTitle(threadId) {
 
     titleGenStart := A_TickCount
     providerInfo := ProviderResolver.Resolve(titleGenModel)
+    if providerInfo.transport = "codex-cli" {
+        ; The Codex backend guarantees one deliberate user action = one Codex
+        ; invocation. Auto-title generation is hidden background work, so never
+        ; spend a second subscription turn on it. Derive a deterministic local
+        ; title from the first user message instead.
+        title := _TitleGen_LocalFallbackTitle(threadId)
+        if title {
+            _TitleGen_PublishTitle(threadId, title)
+            debugLog("[TITLEGEN] local Codex fallback title='" title "' thread=" threadId)
+        } else {
+            _titleGenRequestedThreads.Delete(threadId)
+        }
+        return
+    }
 
     payload := LLMRequestBuilder.createJSONRequest(
         titleGenModel,
@@ -103,6 +117,51 @@ generateThreadTitle(threadId) {
     }
 
     _TitleGen_LogRequest(titleGenModel, providerInfo.providerKey, providerInfo.endpoint, payload, raw, title, titleGenStart, redacted)
+}
+
+; Publish a local title and refresh both thread list and topbar.
+_TitleGen_PublishTitle(threadId, title) {
+    ChatDB.Thread_Update(threadId, title)
+    threads := ChatDB.Thread_List()
+    folders := _GetFolders()
+    postWebMessage("threadList", { threads: threads, folders: folders })
+    folderName := ""
+    for t in threads {
+        if t.id = threadId {
+            folderName := t.folder_name
+            break
+        }
+    }
+    folderRow := ChatDB.db.Query("SELECT folder_id FROM chat_threads WHERE id=?;", threadId)
+    dbFolderId := folderRow.count ? folderRow[1, "folder_id"] : ""
+    debugLog("[TITLEGEN] title='" title "' thread=" threadId
+        . " dbFolderId='" dbFolderId "' resolvedFolderName='" folderName "'")
+    postWebMessage("updateTopbarTitle", { text: title, folder: folderName })
+}
+
+; Codex title generation must not consume a hidden subscription turn. Use the
+; first user message as a deterministic local title instead, normalized and
+; shortened at a word boundary where possible.
+_TitleGen_LocalFallbackTitle(threadId) {
+    path := ChatDB.Msg_GetActivePath(threadId)
+    text := ""
+    for msg in path {
+        if msg.role = "user" && Trim(msg.content) != "" {
+            text := msg.content
+            break
+        }
+    }
+    text := Trim(RegExReplace(text, "\s+", " "), " `t`r`n-*#>")
+    if text = ""
+        return ""
+    if StrLen(text) > 60 {
+        candidate := SubStr(text, 1, 60)
+        lastSpace := InStr(candidate, " ", false, -1)
+        if lastSpace >= 24
+            candidate := SubStr(candidate, 1, lastSpace - 1)
+        text := RTrim(candidate, " ,;:-") "…"
+    }
+    return _TitleGen_CleanTitle(text)
 }
 
 ; Build the prompt from the first user+assistant exchange.

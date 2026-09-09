@@ -37,7 +37,21 @@ async function enableWebSearch(cdp) {
   await cdp.waitFor('document.getElementById("webSearchToggle") !== null', 10000, 200, 'Web Search toggle');
   await cdp.clearPosted();
   await cdp.eval('document.getElementById("webSearchToggle").click()');
-  await cdp.waitFor('window.__posted && window.__posted.some((m) => m.includes("updateModelSettings"))', 5000, 100, 'Web Search settings update');
+  // First prove the real click listener ran. This distinguishes a missing UI
+  // binding from a delayed debounced IPC post under parallel WebView2 load.
+  await cdp.waitFor('window._currentSettings && window._currentSettings.webSearch === true && document.getElementById("webSearchToggle").classList.contains("on")', 5000, 100, 'Web Search toggle state');
+  // These scenarios exercise search execution, not debounce timing (#20 owns
+  // that contract). Flush through the same production path used by Send so
+  // parallel WebView2 scheduling cannot turn a delayed 300ms timer into a
+  // false search failure.
+  const flushed = await cdp.eval('typeof _sendAllSettings === "function" ? (_sendAllSettings(true), true) : false');
+  if (!flushed) throw new Error('production _sendAllSettings flush is unavailable');
+  try {
+    await cdp.waitFor('window.__posted && window.__posted.some((m) => m.includes("updateModelSettings"))', 5000, 100, 'Web Search settings update');
+  } catch (e) {
+    const state = await cdp.eval('(() => ({ webSearch: !!(window._currentSettings && window._currentSettings.webSearch), toggleOn: document.getElementById("webSearchToggle").classList.contains("on"), posted: (window.__posted || []).slice(-8) }))()');
+    throw new Error(e.message + ' state=' + JSON.stringify(state));
+  }
   const posted = await cdp.postedMessages();
   const last = posted.filter((m) => m.includes('"updateModelSettings"')).pop();
   if (!last) throw new Error('no updateModelSettings posted after enabling web search');

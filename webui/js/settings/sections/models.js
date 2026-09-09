@@ -563,12 +563,33 @@
         reasoning: values.reasoning
       };
       _applyMeta(models[fullId], values);
+      _applyCodexDefaults(models[fullId], values);
     });
     return { models: models };
   }
 
   // Copy stashed metadata (api/compat/thinkingLevelMap/thinkingOff) onto a
   // saved entry so new model ids don't lose their thinking metadata.
+  function _applyCodexDefaults(entry, values) {
+    if (!entry || !values || values.provider !== 'codex') return;
+    entry.reasoning = true;
+    if (values.api === undefined) entry.api = 'codex-cli';
+    if (values.compat === undefined) {
+      entry.compat = {
+        thinkingFormat: 'codex-cli',
+        supportsReasoningEffort: true,
+        supportsUsageInStreaming: false,
+        maxTokensField: ''
+      };
+    }
+    if (values.thinkingLevelMap === undefined) {
+      // Unknown future Codex models get only the conservative common efforts.
+      // Curated built-ins can expose none/xhigh/max when OpenAI documents them.
+      entry.thinkingLevelMap = { low: 'low', medium: 'medium', high: 'high' };
+    }
+    if (values.thinkingOff === undefined) entry.thinkingOff = 'low';
+  }
+
   function _applyMeta(entry, values) {
     ['api', 'compat', 'thinkingLevelMap', 'thinkingOff', 'displayName'].forEach(function(k) {
       if (values[k] !== undefined) entry[k] = values[k];
@@ -593,6 +614,7 @@
         reasoning: values.reasoning
       });
       _applyMeta(models[models.length - 1], values);
+      _applyCodexDefaults(models[models.length - 1], values);
     });
     return models;
   }

@@ -30,6 +30,11 @@ RuntimeResolver_CheckApiKeys() {
     anyKeyFound := false
     keyProviders := ""
     for providerKey, p in providers {
+        transport := p.HasOwnProp("transport") && p.transport != "" ? p.transport : "http"
+        if transport != "http" {
+            anyKeyFound := true
+            break
+        }
         key := _RuntimeResolver_ApiKeyFor(p)
         if key != "" {
             anyKeyFound := true

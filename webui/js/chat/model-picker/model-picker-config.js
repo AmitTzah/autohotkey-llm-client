@@ -2,6 +2,10 @@
 // model-picker-config.js — Right panel config + system prompt modal
 // ======================================================
 
+function _supportsTemperatureValue(value) {
+  return !(value === false || value === 0 || value === '0' || value === 'false');
+}
+
 function openModelSettings() {
   // Settings are always visible in right panel — no modal to open
   // Request current settings from AHK
@@ -25,7 +29,8 @@ function populateCurrentSettings(settings) {
     assistantName: settings.assistantName || '',
     assistantBaseModel: settings.assistantBaseModel || '',
     assistantDescription: settings.assistantDescription || '',
-    webSearch: !!settings.webSearch
+    webSearch: !!settings.webSearch,
+    supportsTemperature: _supportsTemperatureValue(settings.supportsTemperature)
   };
 
   // Sync the composer Web Search toggle with the current settings
@@ -53,7 +58,13 @@ function populateCurrentSettings(settings) {
   if (tempSlider) {
     // Use explicit empty checks because temperature 0 is valid.
     // instead of a truthiness check (0 is falsy in JS).
-    var hasTemp = settings.temperatureOverrideSet !== true && settings.temperature !== '' && settings.temperature !== undefined && settings.temperature !== null;
+    var supportsTemperature = _supportsTemperatureValue(settings.supportsTemperature);
+    var tempField = tempSlider.parentElement;
+    if (tempField)
+      tempField.style.display = supportsTemperature ? '' : 'none';
+    tempSlider.disabled = !supportsTemperature;
+    tempSlider.title = supportsTemperature ? '' : 'Temperature is not supported by the Codex CLI backend.';
+    var hasTemp = supportsTemperature && settings.temperatureOverrideSet !== true && settings.temperature !== '' && settings.temperature !== undefined && settings.temperature !== null;
     if (hasTemp) {
       tempSlider.value = settings.temperature;
       tempSlider.classList.remove('temp-default');
@@ -66,6 +77,9 @@ function populateCurrentSettings(settings) {
       if (tempReset) tempReset.style.display = 'none';
     }
   }
+
+  if (tempSlider && !supportsTemperature && tempVal)
+    tempVal.textContent = 'Not supported';
 
   // Thinking dropdown — the backend sends raw level values; the shared
   // ReasoningLevels helper labels and sorts them (Model Default + levels).

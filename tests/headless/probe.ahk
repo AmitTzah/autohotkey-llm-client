@@ -418,7 +418,7 @@ switch command {
             ; rendered (transient GDI failure in this process) — report it so
             ; the runner can retry with a fresh process instead of treating it
             ; as "icon not applied".
-            "renderFailed", customFp = "" ? 1 : 0,
+            "renderFailed", (customFp = "" || ((hBig || hSmall) && fpBig = "" && fpSmall = "")) ? 1 : 0,
             ; Handle equality is unreliable (same file loaded twice gives two
             ; handles), so compare rendered pixels instead.
             "customApplied", (fpBig && fpBig = customFp) || (fpSmall && fpSmall = customFp) ? 1 : 0,

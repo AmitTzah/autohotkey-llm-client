@@ -3,11 +3,18 @@
 ; ======================================================
 
 handleChatSend(params, *) {
+    global requestParams
     global activeThreadId
     transactionStarted := false
     try {
     message := params.Has("message") ? params["message"] : ""
     attachments := params.Has("attachments") ? params["attachments"] : []
+    latencyTraceId := params.Has("latencyTraceId") ? params["latencyTraceId"] : ""
+    if latencyTraceId != "" {
+        requestParams["_latencyTraceId"] := latencyTraceId
+        requestParams["_latencyTraceStartTick"] := A_TickCount
+        debugLog("[LATENCY][" latencyTraceId "] +0ms ahk.chatSend.received", "Latency")
+    }
 
     if !message && !attachments.Length
         return
@@ -62,6 +69,8 @@ handleChatSend(params, *) {
             docCount++
     }
     ChatDB.CommitTransaction()
+    if latencyTraceId != ""
+        debugLog("[LATENCY][" latencyTraceId "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.user-message.persisted", "Latency")
     transactionStarted := false
     if (imageCount > 0 || docCount > 0)
         debugLog("[ATTACH] Sent — " (imageCount + docCount) " files (image=" imageCount " doc=" docCount ")")
@@ -74,7 +83,16 @@ handleChatSend(params, *) {
     ; Normal chat sends always stream; the command-triggered path
     ; sets this flag via OnTriggerLLM's wParam.
     requestParams["stream"] := true
+    if latencyTraceId != ""
+        debugLog("[LATENCY][" latencyTraceId "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.request-dispatch.begin", "Latency")
     _BuildAndFireRequest()
+    if latencyTraceId != "" {
+        debugLog("[LATENCY][" latencyTraceId "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.request-dispatch.returned", "Latency")
+        ; The stream/non-stream scope captured these fields synchronously.
+        ; Avoid leaking this user-send trace into later command-triggered work.
+        requestParams.Delete("_latencyTraceId")
+        requestParams.Delete("_latencyTraceStartTick")
+    }
 
     } catch Error as e {
         if transactionStarted

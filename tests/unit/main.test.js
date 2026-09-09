@@ -26,6 +26,7 @@ function loadMainModule({ chatMessages = null } = {}) {
             _showChat: function() { receivedCalls._showChat = true; },
             _hideSettings: function() { receivedCalls._hideSettings = true; },
             SettingsPanel: { onSettingsReceived: function(data) { receivedCalls.onSettingsReceived = data; } },
+            SettingsProviders: { handleCodexStatus: function(data) { receivedCalls.codexStatus = data; } },
         },
         console: console,
         md: { render: (c) => '<p>' + c + '</p>' },
@@ -81,6 +82,13 @@ describe('handleWebMessage routing', () => {
     it('keeps single-newline paragraph breaks visible (markdown-it breaks:true, bugs #222/#224)', () => {
         const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'main.js'), 'utf-8');
         assert.ok(src.includes('breaks: true'), 'markdown-it must render soft breaks (single newlines) as <br> so paragraph breaks stay visible');
+    });
+
+    it('routes Codex status responses to provider settings', () => {
+        const ctx = loadMainModule();
+        const data = { installed: true, supported: true, authenticated: true, version: '0.153.4' };
+        ctx.handleWebMessage({ data: JSON.stringify({ target: 'codexStatus', data }) });
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(ctx._receivedCalls.codexStatus)), data);
     });
 
     it('routes initChatMode', () => {

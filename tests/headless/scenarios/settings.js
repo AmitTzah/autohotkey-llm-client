@@ -311,7 +311,12 @@ scenarios.push({
     await cdp.waitFor('document.querySelector(' + JSON.stringify(rowSel) + ') !== null', 5000, 200, 'seeded model row');
     await cdp.type(rowSel, '128K');
     await cdp.click('.nav-footer .btn-primary');
-    await cdp.waitFor('window.SettingsPanel && !window.SettingsPanel.isDirty()', 15000, 300, 'save acknowledged');
+    try {
+      await cdp.waitFor('window.SettingsPanel && !window.SettingsPanel.isDirty()', 15000, 300, 'save acknowledged');
+    } catch (err) {
+      const state = await cdp.eval('({ dirty: window.SettingsPanel && window.SettingsPanel.isDirty ? window.SettingsPanel.isDirty() : null, saveDisabled: document.querySelector(".nav-footer .btn-primary") ? document.querySelector(".nav-footer .btn-primary").disabled : null, confirmText: document.getElementById("confirmModal") && document.getElementById("confirmModal").classList.contains("open") ? document.getElementById("confirmModal").textContent : "" })');
+      throw new Error(err.message + ' | settings state=' + JSON.stringify(state));
+    }
     // The saved file must still carry the metadata for the new id.
     const saved = readJsonFile(path.join(dataDir, 'settings.json'));
     const back = saved.models && saved.models['openai/gpt-brand-new'];
@@ -1942,8 +1947,9 @@ scenarios.push({
     await showChat();
     await openSettings(cdp);
     await openSection(cdp, 'providers');
+    const providerCountBefore = await cdp.eval('document.querySelectorAll("#providerGrid .provider-card").length');
     await cdp.click('#addProviderBtn');
-    await cdp.waitFor('document.querySelectorAll("#providerGrid .provider-card").length === 5', 10000, 100, 'custom provider card');
+    await cdp.waitFor('document.querySelectorAll("#providerGrid .provider-card").length === ' + (providerCountBefore + 1), 10000, 100, 'custom provider card');
 
     const customProvider = await cdp.eval(`(() => {
       const cards = [...document.querySelectorAll('#providerGrid .provider-card')];

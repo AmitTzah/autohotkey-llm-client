@@ -9,7 +9,11 @@ class ProviderResolver {
     static _getApiKey(p) {
         if p.HasOwnProp("authMode") && p.authMode = "direct" && p.HasOwnProp("apiKey") && p.apiKey != ""
             return p.apiKey
-        return EnvGet(p.authEnvVar)
+        if p.HasOwnProp("authMode") && p.authMode = "chatgpt"
+            return ""
+        if p.HasOwnProp("authEnvVar") && p.authEnvVar != ""
+            return EnvGet(p.authEnvVar)
+        return ""
     }
 
     static _buildResult(providerKey, modelName, p) {
@@ -24,7 +28,10 @@ class ProviderResolver {
             modelName: apiModelName,
             apiKey: resolvedKey,
             endpoint: p.endpoint,
-            fimEndpoint: p.HasOwnProp("fimEndpoint") ? p.fimEndpoint : ""
+            fimEndpoint: p.HasOwnProp("fimEndpoint") ? p.fimEndpoint : "",
+            transport: p.HasOwnProp("transport") && p.transport != "" ? p.transport : "http",
+            authMode: p.HasOwnProp("authMode") ? p.authMode : "env",
+            billingMode: p.HasOwnProp("billingMode") ? p.billingMode : "api"
         }
     }
 
@@ -77,6 +84,6 @@ class ProviderResolver {
         ; index a missing key.
         for firstKey in providers
             return ProviderResolver._buildResult(firstKey, modelId, providers[firstKey])
-        return { providerKey: "", modelName: modelId, apiKey: "", endpoint: "", fimEndpoint: "" }
+        return { providerKey: "", modelName: modelId, apiKey: "", endpoint: "", fimEndpoint: "", transport: "http", authMode: "env", billingMode: "api" }
     }
 }

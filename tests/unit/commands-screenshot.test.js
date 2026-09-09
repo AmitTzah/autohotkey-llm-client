@@ -70,6 +70,23 @@ describe('Attach Screenshot command option', () => {
     assert.match(result.message, /does not support image input/);
   });
 
+  it('does not cross providers when a fully-qualified command model is missing', () => {
+    const C = loadCore();
+    const command = {
+      commandName:'Shot', menuText:'Shot', APIModels:'openai/gpt-5.6-luna',
+      pasteMode:'chat', includeImageContext:true, tags:[]
+    };
+    C.load({
+      commands: [command],
+      models: { 'codex/gpt-5.6-luna': { vision:false } },
+      commandGroupOrders: {}, submenuOrder: []
+    });
+    C.syncDetail = function() {};
+    const result = C.validate();
+    assert.strictEqual(result.valid, true,
+      'openai/gpt-5.6-luna must not be rebound to codex/gpt-5.6-luna by bare-name fallback');
+  });
+
   it('accepts numeric vision=1 from AHK settings payloads', () => {
     const result = validateCommand({ commandName:'Shot', menuText:'Shot', APIModels:'vision/model', pasteMode:'chat', includeImageContext:true, tags:[] }, { vision:1 });
     assert.strictEqual(result.valid, true);

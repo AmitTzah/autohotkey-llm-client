@@ -52,6 +52,12 @@ function loadStreamModule() {
 }
 
 describe('streamState defaults', () => {
+    it('tracks activity separately from provider reasoning', () => {
+        const ctx = loadStreamModule();
+        assert.strictEqual(ctx.streamState.thinkingKind, 'reasoning');
+        assert.strictEqual(ctx.streamState.activitySearchCount, 0);
+    });
+
     it('initializes with active=false', () => {
         const ctx = loadStreamModule();
         assert.strictEqual(ctx.streamState.active, false);
@@ -138,6 +144,54 @@ describe('createStreamingBubble author label escaping (bug #208)', () => {
         const html = h.html();
         assert.ok(html.indexOf('>DeepSeek V4 Flash<') >= 0, 'plain names must render as-is: ' + html);
         assert.strictEqual(html.indexOf('&lt;'), -1, 'plain names must not be over-escaped');
+    });
+});
+
+describe('Codex activity UX', () => {
+    it('replaces the visible activity snapshot instead of accumulating pseudo-reasoning', () => {
+        const ctx = loadStreamModule();
+        const content = { textContent: '' };
+        const summary = { innerHTML: '' };
+        const details = {
+            open: true,
+            querySelector: (sel) => sel === 'summary' ? summary : content,
+        };
+        ctx.startStreaming = () => { ctx.streamState.active = true; };
+        ctx.createThinkingBlock = () => details;
+        ctx.onStreamReasoning({ content: 'Thinking…', kind: 'activity', replace: true, summary: 'Working', searchCount: 0 });
+        ctx.onStreamReasoning({ content: 'Searched the web:\nlatest release', kind: 'activity', replace: true, summary: '1 web search', searchCount: 1 });
+        assert.strictEqual(ctx.streamState.thinkingBuffer, 'Searched the web:\nlatest release');
+        assert.strictEqual(ctx.streamState.thinkingKind, 'activity');
+        assert.strictEqual(ctx.streamState.activitySearchCount, 1);
+        assert.ok(summary.innerHTML.includes('1 web search'));
+    });
+
+    it('uses persisted one-shot content when activity opened the bubble before completion', () => {
+        const ctx = loadStreamModule();
+        ctx.activeThreadId = 't1';
+        ctx.chatMessages = [{ id: 'u1', role: 'user', content: 'question' }];
+        const contentDiv = { innerHTML: '' };
+        const summary = { innerHTML: '' };
+        const details = {
+            open: true,
+            querySelector: (sel) => sel === 'summary' ? summary : { textContent: '' },
+        };
+        ctx.streamState.active = true;
+        ctx.streamState.bubble = {
+            dataset: {},
+            querySelector: (sel) => sel === '.msg-content' ? contentDiv : null,
+        };
+        ctx.streamState.contentDiv = contentDiv;
+        ctx.streamState.contentBuffer = '';
+        ctx.streamState.thinkingBuffer = 'Searched the web:\nlatest release';
+        ctx.streamState.thinkingKind = 'activity';
+        ctx.streamState.activitySearchCount = 1;
+        ctx.streamState.thinkingDetails = details;
+        ctx.streamState.modelName = 'gpt-5.6-luna';
+        ctx.addStreamingActions = () => {};
+        ctx.onStreamDone({ model: 'gpt-5.6-luna', threadId: 't1', dbMsg: { id: 'a1', parentId: 'u1', role: 'assistant', content: '0.153.4' } });
+        assert.strictEqual(ctx.chatMessages[ctx.chatMessages.length - 1].content, '0.153.4');
+        assert.strictEqual(contentDiv.innerHTML, '0.153.4');
     });
 });
 

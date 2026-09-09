@@ -14,6 +14,7 @@ scenarios lives in `../BUG_HUNT_REPORT.md` (start there).
 | `settings.js` | Settings persistence and application (hotkeys, icons, tray, modals) |
 | `usage-tokens.js` | Usage dashboards and token/cost accounting |
 | `chat-ui.js` | Chat window UI behavior (streaming, buttons, rendering, editing) |
+| `codex-cli.js` | Real-app Codex CLI transport, reasoning, search, cancellation, history/scoping |
 | `misc.js` | Icons, model-id parsing, vision gating, API logs |
 | `helpers.js` | Shared helpers used by scenario bodies |
 

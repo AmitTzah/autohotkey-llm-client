@@ -188,10 +188,14 @@
     var model = (cmd && cmd.APIModels) ? cmd.APIModels : (_defaultModel || '');
     if (!_models || !model) return model;
     if (_models[model]) return model;
-    var bare = model.indexOf('/') >= 0 ? model.split('/')[1] : model;
+    // A fully-qualified provider/model id is authoritative. If that exact
+    // entry is absent from the current catalog, do not silently bind it to a
+    // different provider that happens to expose the same bare model name.
+    // Bare-name fallback exists only for legacy short ids.
+    if (model.indexOf('/') >= 0) return model;
     var keys = Object.keys(_models);
     for (var i = 0; i < keys.length; i++) {
-      if (keys[i].split('/')[1] === bare) return keys[i];
+      if (keys[i].split('/')[1] === model) return keys[i];
     }
     return model;
   }

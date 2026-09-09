@@ -145,6 +145,40 @@ describe('Providers settings section', () => {
         assert.ok(grid.children[4].innerHTML.indexOf('OA') >= 0, 'initials from second word');
     });
 
+    it('renders the built-in Codex card as a local ChatGPT backend with a non-inference health check', () => {
+        const grid = makeEl('div');
+        grid.querySelectorAll = () => [];
+        const ctx = loadSection({ grid, selectorMap: {} });
+        ctx.module.load({ providers: { codex: { displayName: 'Codex CLI (ChatGPT subscription)', transport: 'codex-cli' } } });
+        const html = grid.children[0].innerHTML;
+        assert.ok(html.includes('Check Codex'));
+        assert.ok(html.includes('codex --version'));
+        assert.ok(html.includes('codex login status'));
+        assert.ok(html.includes('does not invoke a model or consume a Codex turn'));
+        assert.ok(!html.includes('data-field="apiKey"'), 'Codex provider must not expose/store an OpenAI API key field');
+    });
+
+    it('applies Codex status responses to the provider card', () => {
+        const providerId = makeEl('input', { value: 'codex' });
+        const transport = makeEl('input', { value: 'codex-cli' });
+        const statusEl = makeEl('span');
+        const checkBtn = makeEl('button', { disabled: true });
+        const card = makeEl('div');
+        wireQueries(card, {
+            '[data-field="providerId"]': [providerId],
+            '[data-field="transport"]': [transport],
+            '.codex-status': [statusEl],
+            '.check-codex': [checkBtn]
+        });
+        const ctx = loadSection({ docSelectorMap: { '#providerGrid .provider-card': [card] } });
+        ctx.sandbox.window.SettingsProviders.handleCodexStatus({
+            installed: true, supported: true, authenticated: true,
+            message: 'Ready: Codex CLI v0.153.4 is signed in with ChatGPT.', error: ''
+        });
+        assert.strictEqual(checkBtn.disabled, false);
+        assert.ok(statusEl.textContent.includes('signed in with ChatGPT'));
+    });
+
     it('load handles missing grid and missing providers', () => {
         const ctx = loadSection({ grid: null });
         ctx.module.load({ providers: { a: {} } });

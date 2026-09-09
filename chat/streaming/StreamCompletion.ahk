@@ -17,7 +17,9 @@ _handleStreamComplete() {
         streamThreadId := requestParams.Has("_streamThreadId") ? requestParams["_streamThreadId"] : activeThreadId
 
         chatHistoryCopy := requestParams["_streamChatHistoryJSONRequest"]
+        CodexCliTransport._TraceParams(requestParams, "ahk.response.persist.begin")
         saveStreamResponse(requestParams["_streamContent"], requestParams["_streamModelName"], &chatHistoryCopy, requestParams["_streamRequestStartTime"], requestParams["_streamFirstTokenTime"], requestParams["_streamUsage"], requestParams["_streamReasoning"], requestParams["_streamRawLastResponse"], requestParams["_streamProviderKey"], requestParams["_streamRawSseChunks"], streamThreadId)
+        CodexCliTransport._TraceParams(requestParams, "ahk.response.persist.done")
 
         dbMsgData := ""
         userTokenCount := 0
@@ -37,7 +39,9 @@ _handleStreamComplete() {
             }
         }
 
+        CodexCliTransport._TraceParams(requestParams, "ahk.streamDone.post.begin")
         postWebMessage("streamDone", { model: requestParams["_streamModelName"] ? requestParams["_streamModelName"] : requestParams["singleAPIModelName"], displayName: requestParams.Has("_streamDisplayName") ? requestParams["_streamDisplayName"] : "", provider: requestParams.Has("_streamProviderKey") ? requestParams["_streamProviderKey"] : "", dbMsg: dbMsgData, userTokenCount: userTokenCount, threadId: streamThreadId })
+        CodexCliTransport._TraceParams(requestParams, "ahk.streamDone.post.returned")
 
         postThreadStats(streamThreadId)
         ; Persisted assistant messages change sidebar order/model metadata.
@@ -87,6 +91,9 @@ _maybeGenerateTitle(path, threadId := "") {
 }
 
 _getProviderEndpoint() {
+    providerKey := requestParams.Has("_streamProviderKey") ? requestParams["_streamProviderKey"] : "deepseek"
+    if providers.Has(providerKey) && providers[providerKey].HasOwnProp("transport") && providers[providerKey].transport = "codex-cli"
+        return "local:codex-cli"
     providerKey := requestParams.Has("_streamProviderKey") ? requestParams["_streamProviderKey"] : "deepseek"
     if providers.Has(providerKey)
         return providers[providerKey].endpoint

@@ -463,6 +463,20 @@ describe('new model metadata survives a settings save round-trip', () => {
   });
 });
 
+describe('manual Codex model defaults', () => {
+  it('uses the codex transport with conservative reasoning levels for unknown models', () => {
+    const { sections } = loadModule({ modelsRows: [makeMainRow('gpt-future', 'codex')] });
+    const out = sections.models.save();
+    const entry = out.models['codex/gpt-future'];
+    assert.ok(entry, 'manually added Codex model must be saved with the codex provider prefix');
+    assert.strictEqual(entry.api, 'codex-cli');
+    assert.strictEqual(entry.reasoning, true);
+    assert.strictEqual(JSON.stringify(entry.thinkingLevelMap), JSON.stringify({ low: 'low', medium: 'medium', high: 'high' }));
+    assert.strictEqual(entry.thinkingOff, 'low');
+    assert.strictEqual(entry.compat.thinkingFormat, 'codex-cli');
+  });
+});
+
 describe('Models context field focus/blur keeps the k/M suffix (bug #158)', () => {
   it('blur does not collapse "128K" to 128', () => {
     const sharedSrc = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'shared', 'settings-shared.js'), 'utf-8');

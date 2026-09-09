@@ -230,6 +230,12 @@ function handleWebMessage(event) {
         }
         break;
 
+      case 'codexStatus':
+        if (window.SettingsProviders && typeof window.SettingsProviders.handleCodexStatus === 'function') {
+          window.SettingsProviders.handleCodexStatus(data);
+        }
+        break;
+
       case 'iconFileSelected':
         if (window.SettingsIcons && typeof window.SettingsIcons.onFileSelected === 'function') {
           window.SettingsIcons.onFileSelected(data.field, data.path);

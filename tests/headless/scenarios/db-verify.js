@@ -698,6 +698,16 @@ scenarios.push({
     await waitStreamingIdle(cdp, 40000);
     await sleep(1200);
     let rows = seed.query(dbPath, "SELECT id, role, content FROM messages WHERE thread_id='t-cplx-136' AND (content='follow A (branch)' OR content='Hello from the mock LLM. This is the streamed answer.') ORDER BY created_at");
+    // Save-as-Branch commits the local user copy before the AHK callback starts
+    // the follow-up stream. Under parallel load, waitStreamingIdle() can observe
+    // the pre-request idle state and return before the stream even begins. Poll
+    // for the durable assistant continuation so this audit waits on the actual
+    // branch-edit outcome rather than a transient renderer state.
+    const branchDeadline = Date.now() + 20000;
+    while (!rows.some((r) => r.role === 'assistant') && Date.now() < branchDeadline) {
+      await sleep(100);
+      rows = seed.query(dbPath, "SELECT id, role, content FROM messages WHERE thread_id='t-cplx-136' AND (content='follow A (branch)' OR content='Hello from the mock LLM. This is the streamed answer.') ORDER BY created_at");
+    }
     const u2b = rows.find((r) => r.role === 'user');
     const a2b = rows.find((r) => r.role === 'assistant');
     if (!u2b || !a2b) throw new Error('branch-edit did not create u2b/a2b: ' + JSON.stringify(rows));
