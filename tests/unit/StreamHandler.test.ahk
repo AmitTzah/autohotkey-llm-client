@@ -775,17 +775,31 @@ class StreamHandlerTest {
         src := FileRead(srcPath)
         schedulePos := InStr(src, "SetTimer(_RunCodexNonStreamingRequest.Bind(")
         helperPos := InStr(src, "_RunCodexNonStreamingRequest(scope, chatHistoryJSONRequest, providerInfo, requestStartTime)")
-        execPos := InStr(src, "CodexCliTransport.ExecuteRequest(", false, helperPos)
-        if !schedulePos || !helperPos || !execPos
-            throw Error("Codex chat path must defer the blocking exec through the captured non-stream request scope")
+        beginPos := InStr(src, "CodexCliTransport.BeginRequest(", false, helperPos)
+        pollHelperPos := InStr(src, "_PollCodexNonStreamingRequest(asyncState)", false, helperPos)
+        pollCallPos := InStr(src, "CodexCliTransport.PollRequest(asyncState)", false, pollHelperPos)
+        if !schedulePos || !helperPos || !beginPos || !pollHelperPos || !pollCallPos
+            throw Error("Codex chat path must start and poll the CLI through the captured non-stream request scope")
         if schedulePos > helperPos
             throw Error("Codex timer scheduling must occur before the deferred execution helper")
         branchText := SubStr(src, schedulePos, helperPos - schedulePos)
-        if InStr(branchText, "CodexCliTransport.ExecuteRequest(")
-            throw Error("Codex exec must not run inline inside the WebView chatSend callback")
-        helperText := SubStr(src, helperPos, 2200)
-        if !InStr(helperText, "scope.params[") || !InStr(helperText, "streamCancelled")
-            throw Error("Deferred Codex execution must use captured request paths and retain scoped cancellation cleanup")
+        if InStr(branchText, "CodexCliTransport.ExecuteRequest(") || InStr(branchText, "CodexCliTransport.BeginRequest(")
+            throw Error("Codex process start must not run inline inside the WebView chatSend callback")
+        helperText := SubStr(src, helperPos, pollHelperPos - helperPos)
+        pollText := SubStr(src, pollHelperPos, 1200)
+        if !InStr(helperText, "scope.params[") || !InStr(helperText, "SetTimer(asyncState.pollTimer, 50)")
+            throw Error("Deferred Codex start must use captured request paths and schedule non-blocking polling")
+        if InStr(helperText, "CodexCliTransport.ExecuteRequest(") || !InStr(pollText, "CodexCliTransport.PollRequest(asyncState)")
+            throw Error("Live Codex chat must not hold the AHK thread in synchronous ExecuteRequest")
+    }
+
+    CodexNonStreamingRequest_RecordsTransportForCooperativeStop() {
+        srcPath := A_ScriptDir "\\..\\chat\\streaming\\StreamHandler.ahk"
+        src := FileRead(srcPath)
+        transportPos := InStr(src, "scope.transport := providerInfo.transport")
+        schedulePos := InStr(src, "SetTimer(_RunCodexNonStreamingRequest.Bind(")
+        if !transportPos || !schedulePos || transportPos > schedulePos
+            throw Error("Non-stream request scope must record its transport before Codex is deferred so Stop can use cooperative cancellation")
     }
 
     RequestPath_CleansAndRestoresByStreamOwnership() {

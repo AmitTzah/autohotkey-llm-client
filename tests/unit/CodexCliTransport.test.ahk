@@ -191,6 +191,15 @@ class CodexCliTransportTest {
         exitBranch := SubStr(src, waitPos, 700)
         if !InStr(exitBranch, "_CancellationRequested(cancelState)") || !InStr(exitBranch, "cancelled := true")
             throw Error("A killed Codex wrapper must be classified from the UI cancellation flag before the exit branch returns")
+
+        coWaitPos := InStr(src, 'DllCall("Ole32\CoWaitForMultipleHandles"')
+        timeoutPos := InStr(src, "RPC_S_CALLPENDING", false, coWaitPos)
+        cancelPos := InStr(src, "_CancellationRequested(cancelState)", false, timeoutPos)
+        progressPos := InStr(src, "if IsObject(progressCallback)", false, cancelPos)
+        if !coWaitPos || !timeoutPos || !cancelPos || !progressPos
+            throw Error("Codex polling must use a COM-aware STA wait so WebView2 Stop can re-enter while the process is running")
+        if !(coWaitPos < timeoutPos && timeoutPos < cancelPos && cancelPos < progressPos)
+            throw Error("Codex COM-aware wait must observe cancellation before progress polling resumes")
     }
 
     RuntimeVersion_ParsesMinimumAndAllowsCompatibleNewerReleases() {

@@ -118,6 +118,7 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
         _currentStreamKey := ""
         requestStartTime := A_TickCount
         providerInfo := ProviderResolver.Resolve(scope.params["singleAPIModelName"])
+        scope.transport := providerInfo.transport
         if providerInfo.transport = "http" && !providerInfo.endpoint {
             _RemoveNonStreamRequest(scope)
             _ShowEndpointError(providerInfo)
@@ -175,6 +176,82 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
 }
 
 _RunCodexNonStreamingRequest(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {
+    CodexCliTransport._Trace(scope, "ahk.codex.timer-fired")
+    try {
+        reasoning := scope.params.Has("reasoningOverride") ? scope.params["reasoningOverride"] : ""
+        webSearch := scope.params.Has("webSearch") && scope.params["webSearch"]
+        CodexCliTransport._Trace(scope, "ahk.codex.execute.begin")
+        asyncState := CodexCliTransport.BeginRequest(
+            providerInfo,
+            scope.params["chatHistoryJSONRequestFile"],
+            scope.params["cURLOutputFile"],
+            scope.params["cURLErrorFile"],
+            scope,
+            webSearch,
+            reasoning,
+            _PostCodexActivity.Bind(scope, providerInfo)
+        )
+        asyncState.scope := scope
+        asyncState.chatHistoryJSONRequest := chatHistoryJSONRequest
+        asyncState.providerInfo := providerInfo
+        asyncState.requestStartTime := requestStartTime
+        asyncState.pollTimer := _PollCodexNonStreamingRequest.Bind(asyncState)
+        SetTimer(asyncState.pollTimer, 50)
+        CodexCliTransport._Trace(scope, "ahk.codex.poll-scheduled")
+    } catch Error as e {
+        _FailCodexNonStreamingRequest(scope, e)
+    }
+}
+
+_PollCodexNonStreamingRequest(asyncState) {
+    try {
+        codexResult := CodexCliTransport.PollRequest(asyncState)
+        if !IsObject(codexResult)
+            return
+        SetTimer(asyncState.pollTimer, 0)
+        _CompleteCodexNonStreamingRequest(asyncState, codexResult)
+    } catch Error as e {
+        SetTimer(asyncState.pollTimer, 0)
+        _FailCodexNonStreamingRequest(asyncState.scope, e)
+    }
+}
+
+_CompleteCodexNonStreamingRequest(asyncState, codexResult) {
+    scope := asyncState.scope
+    providerInfo := asyncState.providerInfo
+    scope.cancelled := codexResult.cancelled
+    CodexCliTransport._Trace(scope, "ahk.codex.execute.returned", "cancelled=" (scope.cancelled ? "true" : "false"))
+    if codexResult.HasOwnProp("thoughtSummary") && codexResult.thoughtSummary != "" {
+        _PostCodexActivity(scope, providerInfo, {
+            content: codexResult.thoughtSummary,
+            summary: "Thought Process",
+            replace: true,
+            kind: "reasoning"
+        })
+        scope.params["_codexReasoningSummary"] := codexResult.thoughtSummary
+    }
+    _RemoveNonStreamRequest(scope)
+    if scope.cancelled {
+        _DeleteToolLoopFiles(scope)
+        postWebMessage("streamCancelled", { threadId: scope.threadId })
+        if !_HasOtherActiveOperations("", "", scope)
+            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+        return
+    }
+    CodexCliTransport._Trace(scope, "ahk.codex.response-processing.begin")
+    _ProcessNonStreamResponse(scope, asyncState.chatHistoryJSONRequest, providerInfo, asyncState.requestStartTime)
+}
+
+_FailCodexNonStreamingRequest(scope, e) {
+    debugLog("Codex deferred request error: " e.Message "`n" e.Stack, "StreamHandler")
+    _RemoveNonStreamRequest(scope)
+    _DeleteToolLoopFiles(scope)
+    _PostChatError("Request failed: " e.Message, scope.threadId)
+    if !_HasOtherActiveOperations("", "", scope)
+        postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+}
+
+_RunCodexNonStreamingRequestSyncLegacy(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {
     CodexCliTransport._Trace(scope, "ahk.codex.timer-fired")
     try {
         reasoning := scope.params.Has("reasoningOverride") ? scope.params["reasoningOverride"] : ""

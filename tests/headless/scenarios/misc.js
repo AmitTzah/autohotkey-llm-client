@@ -145,6 +145,22 @@ scenarios.push({
   settings: { newChatStartsWith: 'openai/gpt-5-mini' },
   async body({ cdp, mockLog }) {
     const fs = require('node:fs');
+    const readChatRequests = () => {
+      const logLines = fs.existsSync(mockLog) ? fs.readFileSync(mockLog, 'utf8').trim().split(/\r?\n/).filter(Boolean) : [];
+      const chatReqs = logLines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
+        .filter((r) => r.body && r.body.messages && !r.body.prompt && r.body.max_tokens !== 50);
+      return { logLines, chatReqs };
+    };
+    const waitForChatRequestCount = async (expected, label) => {
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const current = readChatRequests();
+        if (current.chatReqs.length >= expected) return current;
+        await sleep(100);
+      }
+      const current = readChatRequests();
+      throw new Error(label + ': expected at least ' + expected + ' chat request(s), got ' + current.chatReqs.length + ': ' + JSON.stringify(current.logLines));
+    };
     await showChat();
     // Exchange 1: a REAL chatSend with an image attachment (vision-capable
     // model would receive image_url; the mock accepts anything).
@@ -155,16 +171,17 @@ scenarios.push({
       });
       return true;
     })()`);
+    // Direct JS->AHK IPC does not synchronously flip renderer loading state.
+    // Prove request 1 actually started before waiting for idle, otherwise the
+    // old idle state can win this race under parallel E2E load.
+    await waitForChatRequestCount(1, 'first image exchange did not reach mock');
     await waitStreamingIdle(cdp, 40000);
-    await sleep(1200);
     // Exchange 2: plain text follow-up about the same image.
     await sendChatMessage(cdp, 'and what about the colors?');
+    await waitForChatRequestCount(2, 'follow-up exchange did not reach mock');
     await waitStreamingIdle(cdp, 40000);
-    await sleep(1200);
 
-    const logLines = fs.existsSync(mockLog) ? fs.readFileSync(mockLog, 'utf8').trim().split(/\r?\n/).filter(Boolean) : [];
-    const chatReqs = logLines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
-      .filter((r) => r.body && r.body.messages && !r.body.prompt && r.body.max_tokens !== 50);
+    const { logLines, chatReqs } = readChatRequests();
     if (chatReqs.length !== 2) throw new Error('expected 2 chat requests, got ' + chatReqs.length + ': ' + JSON.stringify(logLines));
     const req1 = chatReqs[0].body;
     const req2 = chatReqs[1].body;

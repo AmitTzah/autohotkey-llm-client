@@ -111,6 +111,180 @@ class CodexCliTransport {
         }
     }
 
+    ; Start a Codex request without blocking the AHK/WebView UI thread for the
+    ; lifetime of `codex exec`. The caller owns polling via PollRequest().
+    static BeginRequest(providerInfo, requestFile, outputFile, errorFile, cancelState := "", webSearch := false, reasoning := "", progressCallback := "") {
+        CodexCliTransport._Trace(cancelState, "codex.transport.enter")
+        unique := A_TickCount "_" Random(1000, 999999)
+        prefix := A_Temp "\AhkLLM_Codex_" unique
+        promptFile := prefix "_prompt.jsonl"
+        instructionFile := prefix "_instructions.txt"
+        eventsFile := prefix "_events.jsonl"
+        finalFile := prefix "_last.txt"
+        statusFile := prefix "_exit.txt"
+        batchFile := prefix ".cmd"
+        workDir := A_Temp "\AhkLLM-Codex-Work"
+        tempPaths := [promptFile, instructionFile, eventsFile, finalFile, statusFile, batchFile]
+        if !DirExist(workDir)
+            DirCreate(workDir)
+
+        try {
+            hadCachedStatus := IsObject(CodexCliTransport._cachedStatus)
+            CodexCliTransport._Trace(cancelState, "codex.ensure-ready.begin", "cached=" (hadCachedStatus ? "true" : "false"))
+            CodexCliTransport.EnsureReady()
+            CodexCliTransport._Trace(cancelState, "codex.ensure-ready.done", "cached=" (hadCachedStatus ? "true" : "false"))
+            requestObj := jsongo.Parse(FileRead(requestFile, "UTF-8"))
+            prepared := CodexCliTransport.PrepareRequest(requestObj)
+            FileOpen(promptFile, "w", "UTF-8-RAW").Write(prepared.transcript)
+            FileOpen(instructionFile, "w", "UTF-8-RAW").Write(prepared.instructions)
+            CodexCliTransport._Trace(cancelState, "codex.request-files.ready")
+
+            args := CodexCliRuntime.BuildExecArgs(providerInfo.modelName, workDir, instructionFile, finalFile, reasoning, webSearch)
+            batch := CodexCliRuntime.BuildBatch(CodexCliRuntime.Executable(), args, promptFile, eventsFile, errorFile, statusFile)
+            FileOpen(batchFile, "w", "UTF-8-RAW").Write(batch)
+            debugLog("provider=codex model=" providerInfo.modelName " webSearch=" (webSearch ? "live" : "disabled") " reasoning=" reasoning, "CodexCliTransport")
+
+            CodexCliTransport._Trace(cancelState, "codex.exec.begin")
+            state := CodexCliTransport._StartBatch(batchFile, cancelState, eventsFile, progressCallback)
+            state.providerInfo := providerInfo
+            state.outputFile := outputFile
+            state.errorFile := errorFile
+            state.finalFile := finalFile
+            state.eventsFile := eventsFile
+            state.webSearch := webSearch
+            state.tempPaths := tempPaths
+            return state
+        } catch Error as e {
+            for tempPath in tempPaths {
+                if FileExist(tempPath)
+                    try FileDelete(tempPath)
+            }
+            try FileOpen(errorFile, "w", "UTF-8-RAW").Write("Codex CLI request failed: " e.Message)
+            debugLog("Codex async start error: " e.Message "`n" e.Stack, "CodexCliTransport")
+            throw
+        }
+    }
+
+    ; Poll a started Codex request once. Returns an empty string while pending,
+    ; otherwise the same result object returned by ExecuteRequest().
+    static PollRequest(state) {
+        if !IsObject(state)
+            throw Error("Invalid Codex async request state")
+        if state.HasOwnProp("done") && state.done
+            return state.result
+
+        try {
+            cancelState := state.cancelState
+            if CodexCliTransport._CancellationRequested(cancelState) {
+                state.cancelled := true
+                if IsObject(cancelState)
+                    cancelState.cancelled := true
+                if !state.killStarted {
+                    state.killStarted := true
+                    state.killStartedAt := A_TickCount
+                    try Run('taskkill /PID ' state.pid ' /T /F', , "Hide", &killPid)
+                    catch {
+                        DllCall("TerminateProcess", "Ptr", state.processHandle, "UInt", 1)
+                    }
+                }
+            }
+
+            if IsObject(state.progressCallback) && state.eventsFile != "" && A_TickCount - state.progressState.lastPoll >= 100 {
+                state.progressState.lastPoll := A_TickCount
+                CodexCliTransport._DrainProgressEvents(state.eventsFile, state.progressState, state.progressCallback)
+            }
+
+            waitResult := DllCall("WaitForSingleObject", "Ptr", state.processHandle, "UInt", 0, "UInt")
+            if waitResult = 0x102 { ; WAIT_TIMEOUT
+                ; taskkill is launched asynchronously so cancellation never blocks
+                ; WebView2. If it somehow stalls, terminate the wrapper as a bounded
+                ; fallback; the tree-kill command continues independently.
+                if state.killStarted && A_TickCount - state.killStartedAt >= 2000
+                    try DllCall("TerminateProcess", "Ptr", state.processHandle, "UInt", 1)
+                return ""
+            }
+            if waitResult != 0
+                throw OSError(A_LastError, "WaitForSingleObject failed for async Codex wrapper")
+
+            CodexCliTransport._Trace(cancelState, "codex.process.exited")
+            if IsObject(state.progressCallback) && state.eventsFile != ""
+                CodexCliTransport._DrainProgressEvents(state.eventsFile, state.progressState, state.progressCallback, true)
+
+            exitCode := -1
+            code := 0
+            if DllCall("GetExitCodeProcess", "Ptr", state.processHandle, "UInt*", &code, "Int")
+                exitCode := code
+            CodexCliTransport._CloseAsyncProcess(state)
+
+            CodexCliTransport._Trace(cancelState, "codex.exec.returned", "exit=" exitCode " cancelled=" (state.cancelled ? "true" : "false"))
+            if state.cancelled {
+                result := { success: false, cancelled: true }
+            } else {
+                result := CodexCliTransport._FinalizeAsyncRequest(state, exitCode)
+            }
+            state.done := true
+            state.result := result
+            CodexCliTransport._CleanupAsyncRequest(state)
+            return result
+        } catch Error as e {
+            CodexCliTransport._CloseAsyncProcess(state)
+            CodexCliTransport._CleanupAsyncRequest(state)
+            try FileOpen(state.errorFile, "w", "UTF-8-RAW").Write("Codex CLI request failed: " e.Message)
+            debugLog("Codex async poll error: " e.Message "`n" e.Stack, "CodexCliTransport")
+            state.done := true
+            state.result := { success: false, cancelled: false, error: e.Message }
+            return state.result
+        }
+    }
+
+    static _FinalizeAsyncRequest(state, exitCode) {
+        if exitCode != 0 {
+            CodexCliTransport._NormalizeErrorFile(state.errorFile, exitCode)
+            return { success: false, cancelled: false, exitCode: exitCode }
+        }
+        if !FileExist(state.finalFile) {
+            FileOpen(state.errorFile, "w", "UTF-8-RAW").Write("Codex CLI completed without producing a final response.")
+            return { success: false, cancelled: false, exitCode: exitCode }
+        }
+        answer := FileRead(state.finalFile, "UTF-8")
+        CodexCliTransport._Trace(state.cancelState, "codex.final-file.read", "chars=" StrLen(answer))
+        if Trim(answer) = "" {
+            FileOpen(state.errorFile, "w", "UTF-8-RAW").Write("Codex CLI returned an empty final response.")
+            return { success: false, cancelled: false, exitCode: exitCode }
+        }
+        eventsText := FileExist(state.eventsFile) ? FileRead(state.eventsFile, "UTF-8") : ""
+        usage := CodexCliTransport.ExtractUsage(eventsText)
+        webSearchCalls := CodexCliTransport.CountWebSearches(eventsText)
+        thoughtSummary := CodexCliTransport.ExtractThoughtSummary(eventsText)
+        debugLog("webSearchRequested=" (state.webSearch ? "true" : "false") " webSearchCalls=" webSearchCalls, "CodexCliTransport")
+        responseJson := CodexCliTransport.BuildSyntheticResponse(state.providerInfo.modelName, answer, usage)
+        FileOpen(state.outputFile, "w", "UTF-8-RAW").Write(responseJson)
+        CodexCliTransport._Trace(state.cancelState, "codex.synthetic-response.written", "chars=" StrLen(answer))
+        return { success: true, cancelled: false, usage: usage, response: answer, events: eventsText, webSearchCalls: webSearchCalls, thoughtSummary: thoughtSummary }
+    }
+
+    static _CleanupAsyncRequest(state) {
+        if !IsObject(state) || !state.HasOwnProp("tempPaths")
+            return
+        for tempPath in state.tempPaths {
+            if FileExist(tempPath)
+                try FileDelete(tempPath)
+        }
+    }
+
+    static _CloseAsyncProcess(state) {
+        if !IsObject(state)
+            return
+        if state.HasOwnProp("processHandle") && state.processHandle {
+            DllCall("CloseHandle", "Ptr", state.processHandle)
+            state.processHandle := 0
+        }
+        if state.HasOwnProp("cancelState") && IsObject(state.cancelState) {
+            state.cancelState.pid := 0
+            state.cancelState.searchPid := 0
+        }
+    }
+
     ; Check installation/version/authentication without invoking `codex exec`.
     ; This is safe to expose as a Settings health check because it consumes no
     ; inference allowance and never reads or copies Codex credentials.
@@ -529,6 +703,58 @@ class CodexCliTransport {
         return jsongo.Stringify(payload)
     }
 
+    static _StartBatch(batchFile, cancelState := "", eventsFile := "", progressCallback := "") {
+        ; Start the exact cmd.exe wrapper and return immediately. Chat uses this
+        ; with PollRequest() so the AHK/WebView thread remains free between polls.
+        commandLine := '"' A_ComSpec '" /D /S /C ""' batchFile '""'
+        commandBuf := Buffer(StrPut(commandLine, "UTF-16") * 2, 0)
+        StrPut(commandLine, commandBuf, "UTF-16")
+        siSize := A_PtrSize = 8 ? 104 : 68
+        piSize := A_PtrSize = 8 ? 24 : 16
+        startupInfo := Buffer(siSize, 0)
+        processInfo := Buffer(piSize, 0)
+        NumPut("UInt", siSize, startupInfo, 0)
+        created := DllCall("CreateProcessW",
+            "Str", A_ComSpec,
+            "Ptr", commandBuf.Ptr,
+            "Ptr", 0,
+            "Ptr", 0,
+            "Int", false,
+            "UInt", 0x08000000, ; CREATE_NO_WINDOW
+            "Ptr", 0,
+            "Ptr", 0,
+            "Ptr", startupInfo.Ptr,
+            "Ptr", processInfo.Ptr,
+            "Int")
+        if !created
+            throw OSError(A_LastError, "CreateProcessW failed for Codex wrapper")
+
+        processHandle := NumGet(processInfo, 0, "Ptr")
+        threadHandle := NumGet(processInfo, A_PtrSize, "Ptr")
+        pid := NumGet(processInfo, A_PtrSize * 2, "UInt")
+        if threadHandle
+            DllCall("CloseHandle", "Ptr", threadHandle)
+        if IsObject(cancelState) {
+            cancelState.pid := pid
+            cancelState.searchPid := pid
+            if !cancelState.HasOwnProp("cancelled")
+                cancelState.cancelled := false
+        }
+        CodexCliTransport._Trace(cancelState, "codex.process.created", "pid=" pid)
+        return {
+            processHandle: processHandle,
+            pid: pid,
+            cancelState: cancelState,
+            progressCallback: progressCallback,
+            eventsFile: eventsFile,
+            progressState: { lineCount: 0, searchCount: 0, lastPoll: 0, pendingAgentMessage: "", traceOwner: cancelState, firstEventLogged: false, firstItemLogged: false, firstAgentLogged: false },
+            cancelled: false,
+            killStarted: false,
+            killStartedAt: 0,
+            done: false
+        }
+    }
+
     static _RunBatch(batchFile, cancelState := "", eventsFile := "", progressCallback := "") {
         ; Use CreateProcessW rather than AutoHotkey Run/ShellExecute. We need the
         ; exact cmd.exe process handle: ShellExecute can return an intermediary
@@ -572,10 +798,22 @@ class CodexCliTransport {
         cancelled := false
         exitCode := -1
         progressState := { lineCount: 0, searchCount: 0, lastPoll: 0, pendingAgentMessage: "", traceOwner: cancelState, firstEventLogged: false, firstItemLogged: false, firstAgentLogged: false }
+        waitHandles := Buffer(A_PtrSize, 0)
+        NumPut("Ptr", processHandle, waitHandles, 0)
         try {
             loop {
-                waitResult := DllCall("WaitForSingleObject", "Ptr", processHandle, "UInt", 25, "UInt")
-                if waitResult = 0 { ; WAIT_OBJECT_0
+                ; WebView2 delivers WebMessageReceived through COM on this STA.
+                ; CoWaitForMultipleHandles enters COM's modal wait loop, allowing
+                ; the cancelStream callback to re-enter while Codex is running.
+                waitIndex := 0
+                waitResult := DllCall("Ole32\CoWaitForMultipleHandles",
+                    "UInt", 0x18, ; COWAIT_DISPATCH_CALLS | COWAIT_DISPATCH_WINDOW_MESSAGES
+                    "UInt", 25,
+                    "UInt", 1,
+                    "Ptr", waitHandles.Ptr,
+                    "UInt*", &waitIndex,
+                    "Int")
+                if waitResult = 0 { ; S_OK: process handle signalled
                     ; Stop can kill the wrapper from the UI callback before this
                     ; polling loop gets another timeout tick. Preserve that
                     ; user intent instead of misclassifying the killed process
@@ -587,13 +825,8 @@ class CodexCliTransport {
                     }
                     break
                 }
-                if waitResult != 0x102 ; WAIT_TIMEOUT
-                    throw OSError(A_LastError, "WaitForSingleObject failed for Codex wrapper")
-
-                if IsObject(progressCallback) && eventsFile != "" && A_TickCount - progressState.lastPoll >= 100 {
-                    progressState.lastPoll := A_TickCount
-                    CodexCliTransport._DrainProgressEvents(eventsFile, progressState, progressCallback)
-                }
+                if waitResult != -2147417835 ; RPC_S_CALLPENDING: 25ms timeout
+                    throw Error("CoWaitForMultipleHandles failed for Codex wrapper: HRESULT=" waitResult)
 
                 if CodexCliTransport._CancellationRequested(cancelState) {
                     cancelled := true
@@ -604,6 +837,11 @@ class CodexCliTransport {
                         DllCall("TerminateProcess", "Ptr", processHandle, "UInt", 1)
                     DllCall("WaitForSingleObject", "Ptr", processHandle, "UInt", 2000, "UInt")
                     break
+                }
+
+                if IsObject(progressCallback) && eventsFile != "" && A_TickCount - progressState.lastPoll >= 100 {
+                    progressState.lastPoll := A_TickCount
+                    CodexCliTransport._DrainProgressEvents(eventsFile, progressState, progressCallback)
                 }
             }
             CodexCliTransport._Trace(cancelState, "codex.process.exited")

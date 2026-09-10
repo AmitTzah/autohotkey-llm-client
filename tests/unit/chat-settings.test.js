@@ -158,17 +158,18 @@ describe('_makeModelClickHandler — keeps reasoning, clears assistant overrides
         assert.strictEqual(ctx.window._currentSettings.assistantName, '');
         assert.strictEqual(ctx.window._currentSettings.assistantBaseModel, '');
         assert.strictEqual(ctx.window._currentSettings.assistantDescription, '');
-        assert.strictEqual(ctx.window._currentSettings.systemMessage, '');
+        assert.strictEqual(ctx.window._currentSettings.systemMessage, '', 'leaving assistant mode must clear the assistant-owned System Message');
         assert.strictEqual(ctx.window._currentSettings.reasoning, 'high', 'the selected reasoning level must survive a model change');
         assert.strictEqual(ctx.window._currentSettings.temperature, '');
     });
 
-    it('keeps reasoning when switching model-to-model (no assistant was active)', () => {
+    it('keeps the thread system message and reasoning when switching model-to-model', () => {
         const ctx = loadSettingsModule();
         // Simulate model-to-model switch with a custom system message
         ctx.window._currentSettings = {
             model: 'deepseek/deepseek-v4-pro',
             systemMessage: 'Custom system message',
+            systemOverrideSet: true,
             reasoning: 'medium',
             temperature: '1.2',
             assistantName: '',
@@ -193,7 +194,8 @@ describe('_makeModelClickHandler — keeps reasoning, clears assistant overrides
         // Assistant-owned overrides are still cleared, but the user's
         // reasoning selection is preserved on model-to-model switch.
         assert.strictEqual(ctx.window._currentSettings.model, 'anthropic/claude-3');
-        assert.strictEqual(ctx.window._currentSettings.systemMessage, '');
+        assert.strictEqual(ctx.window._currentSettings.systemMessage, 'Custom system message', 'model-to-model switch must preserve the thread System Message');
+        assert.strictEqual(ctx.window._currentSettings.systemOverrideSet, true);
         assert.strictEqual(ctx.window._currentSettings.reasoning, 'medium', 'the selected reasoning level must survive a model-to-model switch');
         assert.strictEqual(ctx.window._currentSettings.temperature, '');
     });

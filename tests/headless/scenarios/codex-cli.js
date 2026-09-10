@@ -251,8 +251,34 @@ scenarios.push({
     if (execs.length !== 1 || !execs[0].pid)
       throw new Error('fake Codex cancel exec was not captured: ' + JSON.stringify(execs));
     const cancelledPid = Number(execs[0].pid);
+    await cdp.clearPosted();
     await cdp.click('#chat-send-btn');
-    await cdp.waitFor('typeof isLoading !== "undefined" && !isLoading && typeof streamState !== "undefined" && !streamState.active', 15000, 100, 'Codex cancellation returned UI to idle');
+    try {
+      await cdp.waitFor('typeof isLoading !== "undefined" && !isLoading && typeof streamState !== "undefined" && !streamState.active', 15000, 100, 'Codex cancellation returned UI to idle');
+    } catch (e) {
+      let pidAliveAtTimeout = false;
+      try { process.kill(cancelledPid, 0); pidAliveAtTimeout = true; } catch {}
+      const state = await cdp.eval(`(() => {
+        const input = document.getElementById('chat-input');
+        const send = document.getElementById('chat-send-btn');
+        return {
+          isLoading: typeof isLoading !== 'undefined' ? isLoading : null,
+          streamActive: typeof streamState !== 'undefined' ? streamState.active : null,
+          streamFinalized: typeof streamState !== 'undefined' ? streamState.finalized : null,
+          inputDisabled: input ? input.disabled : null,
+          sendDisabled: send ? send.disabled : null,
+          sendHtml: send ? send.innerHTML : null,
+          posted: (window.__posted || []).slice(-8)
+        };
+      })()`);
+      const debugLogPath = path.join(process.env.TEMP || process.env.TMP || dataDir, 'LLM_Debug_Log.txt');
+      let debugTail = [];
+      try {
+        if (fs.existsSync(debugLogPath))
+          debugTail = fs.readFileSync(debugLogPath, 'utf8').split(/\r?\n/).filter(Boolean).slice(-80);
+      } catch {}
+      throw new Error(e.message + ' state=' + JSON.stringify({ ...state, pidAliveAtTimeout, execs: execLog(dataDir), debugTail }));
+    }
     await cdp.waitFor('document.getElementById("chat-input") && !document.getElementById("chat-input").disabled', 5000, 100, 'composer re-enabled after Codex Stop');
     await sleep(600);
 
@@ -505,6 +531,101 @@ scenarios.push({
     })()`, 5000, 100, 'temperature restored after AHK round trip');
 
     return 'real model-picker click hid Temperature synchronously for codex/gpt-5.6-luna, the AHK settings round trip kept it hidden, and switching back to DeepSeek restored it';
+  }
+});
+
+scenarios.push({
+  id: 335,
+  name: 'Switching direct models preserves the thread System Message in the right rail and after the AHK round trip',
+  regression: true,
+  mode: null,
+  settings: { threadTitles: { enabled: false } },
+  fixtures: {
+    threads: [{
+      id: 't-model-system-335', title: 'Model Switch System Message', active_leaf_id: 'm-model-system-335-a1',
+      model_override: 'deepseek/deepseek-v4-flash',
+      system_override: 'KEEP-SYSTEM-335', system_override_set: 1
+    }],
+    messages: [
+      { id: 'm-model-system-335-u1', thread_id: 't-model-system-335', role: 'user', content: 'system message switch seed' },
+      { id: 'm-model-system-335-a1', thread_id: 't-model-system-335', role: 'assistant', content: 'seed answer', parent_id: 'm-model-system-335-u1', model: 'deepseek/deepseek-v4-flash' }
+    ]
+  },
+  async body({ cdp, dbPath }) {
+    await showChat();
+    await cdp.eval('window.loadThread("t-model-system-335"); true');
+    await cdp.waitFor(`window.activeThreadId === 't-model-system-335'
+      && window._currentSettings
+      && window._currentSettings.model === 'deepseek/deepseek-v4-flash'
+      && window._currentSettings.systemMessage === 'KEEP-SYSTEM-335'
+      && window._currentSettings.systemOverrideSet === true
+      && document.getElementById('sysMsgMini').value === 'KEEP-SYSTEM-335'`, 15000, 250, 'seed model + system message loaded');
+    await cdp.waitFor('window.modelList && window.modelList.codex && window.modelList.codex.length > 0', 15000, 250, 'Codex model list available');
+    await cdp.clearPosted();
+
+    await cdp.click('#modelCardTrigger');
+    await cdp.waitFor('document.getElementById("modelPopover").classList.contains("open") && document.querySelectorAll("#tab-models .selector-item").length > 0', 5000, 100, 'model picker opened');
+
+    const immediate = await cdp.eval(`(() => {
+      const item = [...document.querySelectorAll('#tab-models .selector-item')].find((el) => {
+        const provider = el.querySelector('.si-desc');
+        const name = el.querySelector('.si-name');
+        return provider && provider.textContent.trim().toLowerCase() === 'codex'
+          && name && name.textContent.indexOf('gpt-5.6-luna') >= 0;
+      });
+      if (!item) return { found: false };
+      item.click();
+      return {
+        found: true,
+        model: window._currentSettings && window._currentSettings.model,
+        systemMessage: window._currentSettings && window._currentSettings.systemMessage,
+        systemOverrideSet: window._currentSettings && window._currentSettings.systemOverrideSet,
+        fieldValue: document.getElementById('sysMsgMini').value
+      };
+    })()`);
+    if (!immediate.found)
+      throw new Error('Codex Luna item was not present in the real model picker');
+    if (immediate.model !== 'codex/gpt-5.6-luna' || immediate.systemMessage !== 'KEEP-SYSTEM-335'
+        || immediate.systemOverrideSet !== true || immediate.fieldValue !== 'KEEP-SYSTEM-335')
+      throw new Error('model switch cleared the System Message synchronously: ' + JSON.stringify(immediate));
+
+    await cdp.waitFor(`window.__posted && window.__posted.some((raw) => {
+      try {
+        const msg = JSON.parse(raw);
+        return msg.action === 'updateModelSettings'
+          && msg.model === 'codex/gpt-5.6-luna'
+          && msg.systemMessage === 'KEEP-SYSTEM-335'
+          && msg.systemOverrideSet === true;
+      } catch (_) { return false; }
+    })`, 5000, 100, 'model switch settings posted with preserved System Message');
+
+    let rows = [];
+    const persistDeadline = Date.now() + 5000;
+    while (Date.now() < persistDeadline) {
+      rows = seed.query(dbPath,
+        "SELECT model_override, system_override, system_override_set FROM chat_threads WHERE id='t-model-system-335'");
+      if (rows.length && rows[0].model_override === 'codex/gpt-5.6-luna'
+          && rows[0].system_override === 'KEEP-SYSTEM-335' && Number(rows[0].system_override_set) === 1)
+        break;
+      await sleep(100);
+    }
+    if (!rows.length || rows[0].model_override !== 'codex/gpt-5.6-luna'
+        || rows[0].system_override !== 'KEEP-SYSTEM-335' || Number(rows[0].system_override_set) !== 1)
+      throw new Error('persisted thread settings lost the System Message on model switch: ' + JSON.stringify(rows));
+
+    await cdp.waitFor(`window._currentSettings
+      && window._currentSettings.model === 'codex/gpt-5.6-luna'
+      && window._currentSettings.systemMessage === 'KEEP-SYSTEM-335'
+      && window._currentSettings.systemOverrideSet === true
+      && document.getElementById('sysMsgMini').value === 'KEEP-SYSTEM-335'`, 5000, 100, 'System Message preserved after AHK persistence round trip');
+
+    await cdp.eval('window.loadThread("t-model-system-335"); true');
+    await cdp.waitFor(`window._currentSettings
+      && window._currentSettings.model === 'codex/gpt-5.6-luna'
+      && window._currentSettings.systemMessage === 'KEEP-SYSTEM-335'
+      && document.getElementById('sysMsgMini').value === 'KEEP-SYSTEM-335'`, 10000, 200, 'System Message restored after thread reload');
+
+    return 'direct model switch preserved the custom System Message immediately, through the AHK round trip, in SQLite, and after reload';
   }
 });
 

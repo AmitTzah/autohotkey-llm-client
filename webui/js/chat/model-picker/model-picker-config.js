@@ -6,6 +6,10 @@ function _supportsTemperatureValue(value) {
   return !(value === false || value === 0 || value === '0' || value === 'false');
 }
 
+function _settingsBoolValue(value) {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
 function openModelSettings() {
   // Settings are always visible in right panel — no modal to open
   // Request current settings from AHK
@@ -19,10 +23,10 @@ function populateCurrentSettings(settings) {
   window._currentSettings = {
     model: settings.model || '',
     systemMessage: settings.systemMessage || '',
-    systemOverrideSet: settings.systemOverrideSet === true,
+    systemOverrideSet: _settingsBoolValue(settings.systemOverrideSet),
     reasoning: settings.reasoning || '',
-    reasoningOverrideSet: settings.reasoningOverrideSet === true,
-    temperatureOverrideSet: settings.temperatureOverrideSet === true,
+    reasoningOverrideSet: _settingsBoolValue(settings.reasoningOverrideSet),
+    temperatureOverrideSet: _settingsBoolValue(settings.temperatureOverrideSet),
     // Temperature 0 is a valid override; only null/undefined means unset.
     temperature: settings.temperature == null ? '' : settings.temperature,
     fontSize: settings.fontSize || '17',

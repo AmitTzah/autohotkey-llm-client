@@ -82,6 +82,19 @@ describe('populateCurrentSettings', () => {
         assert.ok(/settings\.temperature !== '' && settings\.temperature !== undefined/.test(src), 'hasTemp should use explicit empty checks');
     });
 
+    it('normalizes AHK numeric override flags from threadSettings', () => {
+        const ctx = loadModule();
+        ctx.populateCurrentSettings({
+            model: 'deepseek/deepseek-v4-flash',
+            systemMessage: 'KEEP', systemOverrideSet: 1,
+            reasoning: 'high', reasoningOverrideSet: 1,
+            temperature: '', temperatureOverrideSet: 0
+        });
+        assert.strictEqual(ctx.window._currentSettings.systemOverrideSet, true);
+        assert.strictEqual(ctx.window._currentSettings.reasoningOverrideSet, true);
+        assert.strictEqual(ctx.window._currentSettings.temperatureOverrideSet, false);
+    });
+
     it('records AHK numeric false as unsupported temperature for Codex', () => {
         const ctx = loadModule();
         ctx.populateCurrentSettings({ model: 'codex/gpt-5.6-luna', systemMessage: '', reasoning: 'high', temperature: '', supportsTemperature: 0 });

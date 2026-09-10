@@ -213,7 +213,19 @@ handleCancelStream() {
     }
     initialRequest := _FindNonStreamRequestForThread(activeThreadId)
     if initialRequest {
+        CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.enter")
+        if initialRequest.HasOwnProp("transport") && initialRequest.transport = "codex-cli" {
+            ; Codex owns its process handle inside _RunBatch. Keep the WebView2
+            ; COM callback non-blocking: record intent here and let the transport
+            ; loop terminate the process tree after CoWaitForMultipleHandles returns.
+            initialRequest.cancelRequested := true
+            initialRequest.cancelled := true
+            CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.flagged")
+            return
+        }
+        CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.kill.begin")
         SearchTools.CancelProcess(initialRequest)
+        CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.kill.returned")
         if !_HasOtherActiveOperations("", "", initialRequest)
             postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
         return

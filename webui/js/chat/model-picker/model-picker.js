@@ -250,6 +250,7 @@ function _makeModelClickHandler(el, fullId, supportsTemperature) {
         for (var si = 0; si < allItems.length; si++) allItems[si].classList.remove('active');
         el.classList.add('active');
         if (!window._currentSettings) window._currentSettings = {};
+        var wasAssistant = !!window._currentSettings.assistantName;
         window._currentSettings.model = fullId;
         // Clear assistant when user explicitly picks a model
         window._currentSettings.assistantName = '';
@@ -258,8 +259,10 @@ function _makeModelClickHandler(el, fullId, supportsTemperature) {
         // Keep the selected reasoning level across model changes (it only
         // falls back to Model Default when the new model doesn't support
         // it). Still clear assistant-owned system prompt / temperature.
-        window._currentSettings.systemMessage = '';
-        window._currentSettings.systemOverrideSet = false;
+        if (wasAssistant) {
+            window._currentSettings.systemMessage = '';
+            window._currentSettings.systemOverrideSet = false;
+        }
         window._currentSettings.temperature = '';
         window._currentSettings.reasoningOverrideSet = window._currentSettings.reasoning !== '';
         window._currentSettings.temperatureOverrideSet = false;
