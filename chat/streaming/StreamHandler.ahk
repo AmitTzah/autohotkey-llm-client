@@ -219,6 +219,7 @@ _PollCodexNonStreamingRequest(asyncState) {
 _CompleteCodexNonStreamingRequest(asyncState, codexResult) {
     scope := asyncState.scope
     providerInfo := asyncState.providerInfo
+    scope.params["_codexGeneratedAttachments"] := codexResult.HasOwnProp("generatedAttachments") ? codexResult.generatedAttachments : []
     scope.cancelled := codexResult.cancelled
     CodexCliTransport._Trace(scope, "ahk.codex.execute.returned", "cancelled=" (scope.cancelled ? "true" : "false"))
     if codexResult.HasOwnProp("thoughtSummary") && codexResult.thoughtSummary != "" {
@@ -355,6 +356,7 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
         requestParams["_streamLastPos"] := 0
         requestParams["_streamContent"] := ""
         requestParams["_streamReasoning"] := requestParams.Has("_codexReasoningSummary") ? requestParams["_codexReasoningSummary"] : ""
+        requestParams["_streamGeneratedAttachments"] := requestParams.Has("_codexGeneratedAttachments") ? requestParams["_codexGeneratedAttachments"] : []
         sanitizedModel := ModelParser.Sanitize(requestParams["singleAPIModelName"])
         requestParams["_streamModelName"] := sanitizedModel
         requestParams["_streamDisplayName"] := sanitizedModel
@@ -391,7 +393,7 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
             _handleNonStreamToolCalls(response.toolCalls, scope)
             return
         }
-        if !response.response {
+        if !response.response && !requestParams["_streamGeneratedAttachments"].Length {
             _handleStreamError()
             _cleanupStreamState()
             return
@@ -1216,7 +1218,7 @@ _finalizeStreaming() {
 ; pending web-search tool calls (tool-call rounds must route to the tool loop,
 ; not the empty-response error branch).
 _NoContentAndNoToolCalls() {
-    if requestParams["_streamContent"] != "" || requestParams["_streamReasoning"] != ""
+    if requestParams["_streamContent"] != "" || requestParams["_streamReasoning"] != "" || (requestParams.Has("_streamGeneratedAttachments") && requestParams["_streamGeneratedAttachments"].Length)
         return false
     if requestParams.Has("_streamToolCalls") && requestParams["_streamToolCalls"].Count
         return false
@@ -1398,6 +1400,10 @@ _cleanupStreamState() {
         requestParams.Delete("_streamContent")
     if requestParams.Has("_streamReasoning")
         requestParams.Delete("_streamReasoning")
+    if requestParams.Has("_streamGeneratedAttachments")
+        requestParams.Delete("_streamGeneratedAttachments")
+    if requestParams.Has("_codexGeneratedAttachments")
+        requestParams.Delete("_codexGeneratedAttachments")
     if requestParams.Has("_streamModelName")
         requestParams.Delete("_streamModelName")
     if requestParams.Has("_streamDisplayName")

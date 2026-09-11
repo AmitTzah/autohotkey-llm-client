@@ -629,4 +629,126 @@ scenarios.push({
   }
 });
 
+scenarios.push({
+  id: 336,
+  name: 'Codex generated image persists across reload and reaches the next turn as visual context',
+  regression: true,
+  mode: null,
+  settings: { threadTitles: { enabled: false } },
+  fixtures: {
+    threads: [{
+      id: 't-codex-image-336', title: 'Codex Image Generation', active_leaf_id: 'm-codex-image-336-a1',
+      model_override: 'codex/gpt-5.6-luna', reasoning_override: 'medium', reasoning_override_set: 1
+    }],
+    messages: [
+      { id: 'm-codex-image-336-u1', thread_id: 't-codex-image-336', role: 'user', content: 'image generation seed' },
+      { id: 'm-codex-image-336-a1', thread_id: 't-codex-image-336', role: 'assistant', content: 'seed answer', parent_id: 'm-codex-image-336-u1', model: 'codex/gpt-5.6-luna' }
+    ]
+  },
+  preLaunch(dataDir) { installFakeCodex(dataDir); },
+  launchEnv: fakeLaunchEnv,
+  async body({ cdp, dataDir, dbPath }) {
+    await showChat();
+    await cdp.eval('window.loadThread("t-codex-image-336"); true');
+    await cdp.waitFor(`window.activeThreadId === 't-codex-image-336'
+      && window._currentSettings
+      && window._currentSettings.model === 'codex/gpt-5.6-luna'`, 15000, 250, 'Codex image thread loaded');
+
+    const initial = await cdp.eval(`(() => {
+      const row = document.getElementById('imageGenerationRow');
+      const sw = document.getElementById('railImageGenerationToggle');
+      return {
+        rowVisible: !!row && getComputedStyle(row).display !== 'none',
+        on: !!sw && sw.classList.contains('on'),
+        state: !!(window._currentSettings && window._currentSettings.imageGeneration)
+      };
+    })()`);
+    if (!initial.rowVisible || initial.on || initial.state)
+      throw new Error('Image Generation must be visible for Codex and default OFF: ' + JSON.stringify(initial));
+
+    await cdp.click('#railImageGenerationToggle');
+    await cdp.waitFor(`window._currentSettings && window._currentSettings.imageGeneration === true
+      && document.getElementById('railImageGenerationToggle').classList.contains('on')`, 5000, 100, 'Image Generation enabled');
+    await sleep(500);
+
+    let toggleRows = seed.query(dbPath, "SELECT advanced_toggles FROM chat_threads WHERE id='t-codex-image-336'");
+    if (!toggleRows.length) throw new Error('image-generation thread settings row missing');
+    let toggles = {};
+    try { toggles = JSON.parse(toggleRows[0].advanced_toggles || '{}'); }
+    catch (e) { throw new Error('Image Generation persisted malformed advanced_toggles JSON: ' + e.message); }
+    if (!toggles.imageGeneration)
+      throw new Error('Image Generation ON state did not persist per thread: ' + JSON.stringify(toggleRows[0]));
+
+    await sendChatMessage(cdp, 'generate image codex');
+    await cdp.waitFor(`(() => {
+      const el = document.querySelector('#chat-messages .thinking-block .thinking-content');
+      return !!el && el.textContent.indexOf('Calling image generation tool') >= 0;
+    })()`, 15000, 100, 'Codex image-generation public reasoning visible');
+    await waitStreamingIdle(cdp, 30000);
+    await cdp.waitFor('document.querySelectorAll("#chat-messages .msg.bot .msg-attachment-image img").length > 0', 10000, 200, 'generated image rendered');
+
+    const execs = execLog(dataDir);
+    if (execs.length !== 1)
+      throw new Error('one Image Generation Send must produce exactly one Codex exec: ' + JSON.stringify(execs));
+    const invocation = execs[0];
+    if (invocation.args.includes('image_generation') && invocation.args.some((arg, i) => arg === '--disable' && invocation.args[i + 1] === 'image_generation'))
+      throw new Error('Image Generation ON still disabled image_generation: ' + JSON.stringify(invocation.args));
+    for (const feature of ['shell_tool', 'unified_exec', 'view_image', 'code_mode', 'apps', 'multi_agent', 'plugins', 'browser_use', 'computer_use']) {
+      if (!invocation.args.some((arg, i) => arg === '--disable' && invocation.args[i + 1] === feature))
+        throw new Error('Image Generation weakened unrelated Codex lockdown for ' + feature + ': ' + JSON.stringify(invocation.args));
+    }
+
+    const assistantRows = seed.query(dbPath,
+      "SELECT id, content, reasoning, model, provider FROM messages WHERE thread_id='t-codex-image-336' AND role='assistant' ORDER BY rowid DESC LIMIT 1");
+    if (!assistantRows.length) throw new Error('image-only Codex assistant message was not persisted');
+    const assistant = assistantRows[0];
+    if (String(assistant.content || '').trim() !== '')
+      throw new Error('image-only fake Codex response unexpectedly persisted text: ' + JSON.stringify(assistant));
+    if (String(assistant.reasoning || '').indexOf('Calling image generation tool') < 0)
+      throw new Error('image-generation public reasoning was not persisted: ' + JSON.stringify(assistant));
+
+    const attachments = seed.query(dbPath,
+      'SELECT attachment_type, mime_type, original_filename, file_size, file_path FROM message_attachments WHERE message_id = ?', [assistant.id]);
+    if (attachments.length !== 1)
+      throw new Error('expected exactly one generated assistant attachment: ' + JSON.stringify(attachments));
+    const att = attachments[0];
+    const persistedImagePath = path.isAbsolute(att.file_path) ? att.file_path : path.join(dataDir, att.file_path);
+    if (att.attachment_type !== 'image' || att.mime_type !== 'image/png' || Number(att.file_size) <= 8 || !fs.existsSync(persistedImagePath))
+      throw new Error('generated image attachment metadata/file is invalid: ' + JSON.stringify(att));
+
+    const rendered = await cdp.eval(`(() => {
+      const img = document.querySelector('#chat-messages .msg.bot .msg-attachment-image img');
+      return img ? { src: img.src.slice(0, 32), alt: img.alt } : null;
+    })()`);
+    if (!rendered || rendered.src.indexOf('data:image/png;base64,') !== 0)
+      throw new Error('generated attachment did not render through the existing image component: ' + JSON.stringify(rendered));
+
+    await cdp.eval('window.loadThread("t-codex-image-336"); true');
+    await cdp.waitFor('document.querySelectorAll("#chat-messages .msg.bot .msg-attachment-image img").length > 0', 10000, 200, 'generated image restored after reload');
+    if (execLog(dataDir).length !== 1)
+      throw new Error('thread reload must not launch another Codex exec');
+
+    await sendChatMessage(cdp, 'second codex turn: describe the generated image');
+    await waitStreamingIdle(cdp, 30000);
+    const followupExecs = execLog(dataDir);
+    if (followupExecs.length !== 2)
+      throw new Error('image follow-up must produce exactly one additional Codex exec: ' + JSON.stringify(followupExecs));
+    const followup = followupExecs[1];
+    const imageArgs = [];
+    for (let i = 0; i < followup.args.length; i += 1) {
+      if (followup.args[i] === '--image' && followup.args[i + 1]) imageArgs.push(followup.args[i + 1]);
+    }
+    if (imageArgs.length !== 1 || path.resolve(imageArgs[0]) !== path.resolve(persistedImagePath))
+      throw new Error('follow-up Codex exec did not receive the persisted generated image: ' + JSON.stringify({ imageArgs, persistedImagePath }));
+    if (!followup.args.some((arg, i) => arg === '--disable' && followup.args[i + 1] === 'view_image'))
+      throw new Error('follow-up image input must not enable the Codex view_image tool: ' + JSON.stringify(followup.args));
+    if (String(followup.stdin || '').indexOf('[Visual context: image #1 generated by the previous assistant is attached to this turn.]') < 0)
+      throw new Error('follow-up transcript did not preserve generated-image provenance: ' + JSON.stringify(followup.stdin));
+    if (String(followup.stdin || '').indexOf('second codex turn: describe the generated image') < 0)
+      throw new Error('follow-up user text missing from Codex transcript: ' + JSON.stringify(followup.stdin));
+
+    return 'generated PNG persisted and rendered across reload; the next Codex turn received that exact app-owned PNG via --image while view_image stayed disabled';
+  }
+});
+
 module.exports = scenarios;

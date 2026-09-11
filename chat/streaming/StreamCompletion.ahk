@@ -26,7 +26,7 @@ _handleStreamComplete() {
         if streamThreadId {
             path := ChatDB.Msg_GetActivePath(streamThreadId)
             if path.Length {
-                dbMsgData := buildStructuredMessagesFromPath([path[path.Length]])[1]
+                dbMsgData := buildStructuredMessagesFromPath([path[path.Length]], streamThreadId)[1]
                 ; Find last user message's backfilled token_count
                 i := path.Length
                 while i >= 1 {
@@ -101,7 +101,8 @@ _getProviderEndpoint() {
 }
 
 saveStreamResponse(content, modelName, &chatHistoryJSONRequest, requestStartTime, firstTokenTime, usage := {}, reasoning := "", rawLastResponse := "", providerKey := "", rawSseChunks := "", streamThreadId := "") {
-    if !content && !reasoning
+    generatedAttachments := requestParams.Has("_streamGeneratedAttachments") ? requestParams["_streamGeneratedAttachments"] : []
+    if !content && !reasoning && !generatedAttachments.Length
         return
 
     if !streamThreadId
@@ -177,7 +178,10 @@ _persistStreamResponse(content, modelName, reasoning, usage, responseTimeMs := 0
         return
     }
 
-    ChatDB.Msg_Insert({
+    generatedAttachments := requestParams.Has("_streamGeneratedAttachments") ? requestParams["_streamGeneratedAttachments"] : []
+    ChatDB.BeginTransaction()
+    try {
+        assistantMsgId := ChatDB.Msg_Insert({
         thread_id: streamThreadId, role: "assistant", content: content, model: modelName, provider: providerKey,
         parent_id: parentId, sibling_group: retrySiblingGroup, sibling_index: retrySiblingIdx,
         reasoning: reasoning,
@@ -191,6 +195,15 @@ _persistStreamResponse(content, modelName, reasoning, usage, responseTimeMs := 0
         token_attribution_path: attributionPath,
         update_active_leaf: !preserveActiveLeaf
     })
+        for att in generatedAttachments {
+            if !ChatDB.Attachment_Save(assistantMsgId, att)
+                throw Error("Failed to persist generated Codex image attachment")
+        }
+        ChatDB.CommitTransaction()
+    } catch Error as e {
+        ChatDB.RollbackTransaction()
+        throw e
+    }
     _maybeGenerateTitle(path, streamThreadId)
 }
 

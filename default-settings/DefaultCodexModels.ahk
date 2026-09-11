@@ -12,7 +12,7 @@ models["codex/gpt-5.6-luna"] := {
     compat: Map("thinkingFormat", "codex-cli", "supportsReasoningEffort", true, "supportsUsageInStreaming", false, "maxTokensField", ""),
     thinkingLevelMap: Map("none", "none", "low", "low", "medium", "medium", "high", "high", "xhigh", "xhigh", "max", "max"),
     thinkingOff: "none",
-    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: false
+    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: true
 }
 
 models["codex/gpt-5.6-terra"] := {
@@ -20,7 +20,7 @@ models["codex/gpt-5.6-terra"] := {
     compat: Map("thinkingFormat", "codex-cli", "supportsReasoningEffort", true, "supportsUsageInStreaming", false, "maxTokensField", ""),
     thinkingLevelMap: Map("none", "none", "low", "low", "medium", "medium", "high", "high", "xhigh", "xhigh", "max", "max"),
     thinkingOff: "none",
-    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: false
+    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: true
 }
 
 models["codex/gpt-5.6-sol"] := {
@@ -28,7 +28,7 @@ models["codex/gpt-5.6-sol"] := {
     compat: Map("thinkingFormat", "codex-cli", "supportsReasoningEffort", true, "supportsUsageInStreaming", false, "maxTokensField", ""),
     thinkingLevelMap: Map("none", "none", "low", "low", "medium", "medium", "high", "high", "xhigh", "xhigh", "max", "max"),
     thinkingOff: "none",
-    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: false
+    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: true
 }
 
 models["codex/gpt-6-astra"] := {
@@ -36,5 +36,5 @@ models["codex/gpt-6-astra"] := {
     compat: Map("thinkingFormat", "codex-cli", "supportsReasoningEffort", true, "supportsUsageInStreaming", false, "maxTokensField", ""),
     thinkingLevelMap: Map("low", "low", "medium", "medium", "high", "high", "xhigh", "xhigh", "max", "max"),
     thinkingOff: "low",
-    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: false
+    input: 0, cachedInput: 0, output: 0, context: 0, reasoning: true, vision: true
 }

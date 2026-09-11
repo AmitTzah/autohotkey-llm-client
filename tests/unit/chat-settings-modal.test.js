@@ -171,6 +171,43 @@ describe('populateCurrentSettings', () => {
     });
 });
 
+describe('Image Generation right-rail visibility', () => {
+    it('shows only for an effective Codex model and clears stale state for non-Codex', () => {
+        const ctx = loadModule();
+        const row = { style: { display: 'none' } };
+        const added = [], removed = [];
+        const rail = { classList: { add: (c) => added.push(c), remove: (c) => removed.push(c) } };
+        const originalGet = ctx.document.getElementById;
+        ctx.document.getElementById = (id) => {
+            if (id === 'imageGenerationRow') return row;
+            if (id === 'railImageGenerationToggle') return rail;
+            return originalGet(id);
+        };
+
+        ctx.populateCurrentSettings({ model: 'codex/gpt-5.6-luna', systemMessage: '', reasoning: '', temperature: '', imageGeneration: 1 });
+        assert.strictEqual(row.style.display, '', 'Codex should expose the Image Generation row');
+        assert.strictEqual(ctx.window._currentSettings.imageGeneration, true);
+        assert.ok(added.includes('on'), 'persisted ON state should paint the rail switch on');
+
+        ctx.populateCurrentSettings({ model: 'deepseek/deepseek-v4-flash', systemMessage: '', reasoning: '', temperature: '', imageGeneration: 1 });
+        assert.strictEqual(row.style.display, 'none', 'non-Codex should hide the Image Generation row');
+        assert.strictEqual(ctx.window._currentSettings.imageGeneration, false, 'non-Codex effective model must fail closed locally');
+    });
+
+    it('uses assistantBaseModel as the effective model for visibility', () => {
+        const ctx = loadModule();
+        const row = { style: { display: 'none' } };
+        const originalGet = ctx.document.getElementById;
+        ctx.document.getElementById = (id) => id === 'imageGenerationRow' ? row : originalGet(id);
+        ctx.populateCurrentSettings({
+            model: '', systemMessage: '', reasoning: '', temperature: '', imageGeneration: true,
+            assistantName: 'Codex Assistant', assistantBaseModel: 'codex/gpt-5.6-luna'
+        });
+        assert.strictEqual(row.style.display, '');
+        assert.strictEqual(ctx.window._currentSettings.imageGeneration, true);
+    });
+});
+
 describe('updateDropdownLabel', () => {
     it('sets assistant name when isAssistant', () => {
         const ctx = loadModule();

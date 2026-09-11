@@ -675,6 +675,60 @@ class ChatSettingsTest {
 
     ; The active-thread path must keep persisting immediately (and the new
     ; unconditional requestParams write must not break it).
+    test_imageGeneration_isCodexOnlyAndPersistsPerThread() {
+        global requestParams, activeThreadId
+        this._openDb()
+        oldParams := requestParams
+        oldActive := activeThreadId
+        try {
+            threadId := ChatDB.Thread_Create("Image Generation Thread")
+            ChatDB.db.Query("UPDATE chat_threads SET advanced_toggles=? WHERE id=?;", '{"futureToggle":true,"webSearch":true}', threadId)
+            activeThreadId := threadId
+            handleModelSettingsUpdate(jsongo.Parse('{"model":"codex/gpt-5.6-luna","systemMessage":"","reasoning":"","temperature":"","webSearch":false,"imageGeneration":true}'))
+            if !requestParams.Has("imageGeneration") || requestParams["imageGeneration"] != true
+                throw Error("Codex imageGeneration flag was not stored in requestParams")
+            saved := ChatDB.Thread_GetSettings(threadId)
+            if !saved.HasOwnProp("imageGeneration") || saved.imageGeneration != true
+                throw Error("Codex imageGeneration flag did not persist per thread")
+            raw := ChatDB.db.Query("SELECT advanced_toggles FROM chat_threads WHERE id=?;", threadId)
+            parsedToggles := jsongo.Parse(raw[1, "advanced_toggles"])
+            if !parsedToggles.Has("futureToggle") || !parsedToggles["futureToggle"]
+                throw Error("Updating Image Generation must preserve unrelated advanced_toggles keys")
+
+            handleModelSettingsUpdate(jsongo.Parse('{"model":"deepseek/deepseek-v4-flash","systemMessage":"","reasoning":"","temperature":"","webSearch":false,"imageGeneration":true}'))
+            if requestParams["imageGeneration"] != false
+                throw Error("Non-Codex model must fail closed for image generation")
+            saved := ChatDB.Thread_GetSettings(threadId)
+            if saved.imageGeneration != false
+                throw Error("Non-Codex imageGeneration state must persist as false")
+        } finally {
+            requestParams := oldParams
+            activeThreadId := oldActive
+            this._closeDb()
+        }
+    }
+
+    test_imageGeneration_restoresWhenCodexIsTheAppDefault() {
+        global requestParams, appDefaultModel
+        this._openDb()
+        oldParams := requestParams
+        oldDefault := appDefaultModel
+        try {
+            appDefaultModel := "codex/gpt-5.6-luna"
+            threadId := ChatDB.Thread_Create("Codex Default Image Generation")
+            ChatDB.Thread_UpdateSettings(threadId, { webSearch: false, imageGeneration: true })
+            ThreadSettings.RestoreIntoRequestParams(threadId)
+            if requestParams["singleAPIModelName"] != "codex/gpt-5.6-luna"
+                throw Error("Codex app default was not restored as the effective model")
+            if !requestParams.Has("imageGeneration") || requestParams["imageGeneration"] != true
+                throw Error("Image Generation should restore for a Codex app-default model")
+        } finally {
+            requestParams := oldParams
+            appDefaultModel := oldDefault
+            this._closeDb()
+        }
+    }
+
     test_updateFontSize_withActiveThread_persistsImmediately() {
         global requestParams, activeThreadId
 

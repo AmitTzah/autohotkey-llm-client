@@ -5,6 +5,7 @@
 // login status, stdin transcript delivery, JSONL polling, output-last-message,
 // search flags, cancellation, and multiple sequential exec turns.
 const fs = require('node:fs');
+const path = require('node:path');
 
 const args = process.argv.slice(2);
 const logFile = process.env.FAKE_CODEX_LOG || '';
@@ -83,8 +84,11 @@ process.stdin.on('end', () => {
   const searchMode = lower.includes('search on codex');
   const noSearchMode = lower.includes('search off codex');
   const secondTurnMode = lower.includes('second codex turn');
+  const imageMode = lower.includes('generate image codex');
 
-  const publicSummary = secondTurnMode
+  const publicSummary = imageMode
+    ? '**Calling image generation tool**'
+    : secondTurnMode
     ? '**Using the prior AhkLLM transcript**'
     : searchMode
       ? '**Checking the requested current information**'
@@ -95,12 +99,38 @@ process.stdin.on('end', () => {
           : '**Comparing the requested information**';
 
   setTimeout(() => {
+    if (imageMode) {
+      emit({ type: 'thread.started', thread_id: 'fake-image-thread-336' });
+      emit({ type: 'turn.started' });
+    }
     emit({ type: 'item.completed', item: { id: 'reasoning-1', type: 'reasoning', text: publicSummary } });
 
     if (cancelMode) {
       // Keep the real child process alive until AhkLLM's Stop path kills the
       // cmd.exe process tree. No output-last-message is written on purpose.
       setInterval(() => {}, 1000);
+      return;
+    }
+
+    if (imageMode) {
+      const threadId = 'fake-image-thread-336';
+      const dataDir = process.env.AHKLLM_E2E_DATA_DIR || '';
+      const imageDir = path.join(dataDir, 'codex-generated-images', threadId);
+      const imagePath = path.join(imageDir, 'exec-fake-image.png');
+      const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z7ZsAAAAASUVORK5CYII=';
+      fs.mkdirSync(imageDir, { recursive: true });
+      fs.writeFileSync(imagePath, Buffer.from(pngBase64, 'base64'));
+      emit({ type: 'item.completed', item: { id: 'final-image-1', type: 'agent_message', text: '' } });
+      if (!outputFile) {
+        process.stderr.write('missing --output-last-message\n');
+        process.exitCode = 9;
+        return;
+      }
+      fs.writeFileSync(outputFile, '', 'utf8');
+      emit({
+        type: 'turn.completed',
+        usage: { input_tokens: 21, output_tokens: 4, cached_input_tokens: 0, total_tokens: 25 }
+      }, false);
       return;
     }
 

@@ -13,7 +13,7 @@ This is **not** an OpenAI API key substitute or a claim that a ChatGPT subscript
 5. Click **Check Codex**. AhkLLM runs only `codex --version` and `codex login status`; this check does not invoke a model or consume a Codex turn.
 6. Choose a `codex/...` model in the normal model picker or in a supported command.
 
-AhkLLM requires Codex CLI **0.153.0 or newer** and was tested against the **0.153.x** release family. Compatible newer releases are allowed so routine Codex updates do not disable the backend. AhkLLM still passes its restricted execution controls on every request with strict configuration enabled; if a future Codex release removes or changes a required control, that request fails with an incompatibility error instead of silently relaxing the profile. If `codex` is not on `PATH`, set `CODEX_CLI_PATH` to the installed Codex executable or Windows command shim before launching AhkLLM.
+AhkLLM requires Codex CLI **0.153.0 or newer** and the core transport was tested against the **0.153.x** release family. The image-generation path was additionally verified against **Codex CLI 0.154.0**. Compatible newer releases are allowed so routine Codex updates do not disable the backend. AhkLLM still passes its restricted execution controls on every request with strict configuration enabled; if a future Codex release removes or changes a required control, that request fails with an incompatibility error instead of silently relaxing the profile. If `codex` is not on `PATH`, set `CODEX_CLI_PATH` to the installed Codex executable or Windows command shim before launching AhkLLM.
 
 The Codex model list in AhkLLM is curated rather than fetched from the OpenAI API. Actual model availability is controlled by the user's ChatGPT/Codex plan and the installed Codex client, so a listed model can still be unavailable to a particular account.
 
@@ -47,9 +47,19 @@ Automatic thread titles are a special case. If the configured title model is Cod
 
 ## Restricted LLM-only profile
 
-Normal AhkLLM chat deliberately constrains Codex to act like a text LLM rather than a local coding agent. The invocation is ephemeral and non-interactive. AhkLLM disables the local execution and inspection surfaces it knows about, including shell/unified execution, shell snapshots, code modes, local image viewing, apps, plugins, MCP discovery, skills, subagents, memories, browser/computer control, and image generation. It also launches Codex in a dedicated empty working directory, ignores user Codex config/rules, uses `approval_policy="never"`, and keeps the Codex sandbox read-only as a final write-protection backstop.
+Normal AhkLLM chat deliberately constrains Codex to act like an LLM rather than a local coding agent. The invocation is ephemeral and non-interactive. AhkLLM disables the local execution and inspection surfaces it knows about, including shell/unified execution, shell snapshots, code modes, local image viewing, apps, plugins, MCP discovery, skills, subagents, memories, and browser/computer control. Image generation is also disabled by default and is enabled only for an individual turn when the current thread has **Image Generation** turned on and the effective model is a `codex/...` model. It also launches Codex in a dedicated empty working directory, ignores user Codex config/rules, uses `approval_policy="never"`, and keeps the Codex sandbox read-only as a final write-protection backstop.
 
 AhkLLM does not rely on the system prompt as a security control. The prompt tells the model that local tools are unavailable, while CLI feature switches, strict configuration validation, and the read-only sandbox enforce the restricted profile. The 0.153.x family is the tested baseline, not an upper version pin: compatible newer Codex releases are allowed. If Codex changes or removes one of the controls AhkLLM passes to enforce this profile, the CLI invocation fails and AhkLLM reports the incompatibility rather than silently continuing with a weaker configuration.
+
+## Image generation
+
+The per-thread **Image Generation** switch appears in the right rail only when the effective model is a `codex/...` model. It defaults to off. Switching to a non-Codex model hides the control and clears the permission for that thread state.
+
+When enabled, image generation remains part of the same deliberate request: one AhkLLM **Send** launches exactly one `codex exec`. AhkLLM does not make a second model request or an OpenAI API call for the image. Web Search is independent and can be enabled or disabled separately.
+
+Codex CLI 0.154.0 does not expose the generated image as a dedicated `exec --json` item. AhkLLM therefore correlates the public `thread.started` id with Codex's per-thread generated-image output, accepts only PNG files from that correlated directory, rejects link/reparse-point paths, validates the PNG signature and a 32 MiB size limit, then imports the bytes through the existing AhkLLM image-attachment lifecycle. The assistant message and imported attachment are committed transactionally, so a failed attachment save does not leave a partial assistant response. Generated images render through the normal attachment UI and survive thread reloads.
+
+Image input is supported through Codex CLI's explicit `--image` argument. AhkLLM only passes image files that already exist in its managed `attachments` store; it does not enable Codex's local `view_image`, shell, filesystem-inspection, browser, or computer tools. Generated assistant images are carried into the next user turn as visual context, so follow-up questions can refer to an image after it has been rendered and persisted. Non-image attachments continue to use AhkLLM's extracted-text context. Cancellation keeps the existing process-tree termination behavior and does not persist a generated attachment from a cancelled request.
 
 ## Web search
 
@@ -69,7 +79,8 @@ The first Codex backend version intentionally exposes a narrower capability set 
 - Reasoning effort: supported where the selected Codex model offers it.
 - Temperature: not exposed; Codex CLI does not provide an API-equivalent temperature control for this transport.
 - FIM Fill / FIM Continue: not supported by the Codex backend.
-- Image/attachment input: not supported by the initial Codex transport; unsupported message content fails instead of being silently dropped.
+- Image generation: supported for `codex/...` chat threads through the default-off per-thread **Image Generation** toggle; generated PNGs are stored as normal assistant attachments.
+- Image input: supported through explicit app-owned `--image` paths; generated assistant images persist into follow-up visual context without enabling Codex local image/file tools. Non-image attachments use extracted text.
 - AhkLLM local/agent tools: disabled for normal Codex-backed chat.
 - Codex local shell/file/agent tools: disabled by the LLM-only execution profile.
 

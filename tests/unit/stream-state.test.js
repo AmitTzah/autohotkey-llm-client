@@ -469,6 +469,43 @@ describe('onStreamDone reasoning-only responses', () => {
     });
 });
 
+describe('onStreamDone generated attachments', () => {
+    it('preserves and immediately renders attachments when reasoning was streamed', () => {
+        const ctx = loadStreamModule();
+        ctx.chatMessages = [{ id: 'u-image', role: 'user', content: 'draw it' }];
+        const shared = { textContent: '' };
+        const bubble = {
+            dataset: {},
+            querySelector: () => shared,
+            querySelectorAll: () => []
+        };
+        ctx.streamState.active = true;
+        ctx.streamState.bubble = bubble;
+        ctx.streamState.contentDiv = { innerHTML: '' };
+        ctx.streamState.thinkingDetails = { querySelector: () => ({ innerHTML: '', remove: () => {} }) };
+        ctx.streamState.contentBuffer = '';
+        ctx.streamState.thinkingBuffer = 'Using image generation tool';
+        ctx.streamState.modelName = 'gpt-5.6-luna';
+        let renders = 0;
+        let actionsAdded = 0;
+        ctx.renderChatMessages = () => { renders++; };
+        ctx.addStreamingActions = () => { actionsAdded++; };
+        const attachments = [{ id: 'att-1', attachment_type: 'image', mime_type: 'image/png', base64: 'iVBORw0KGgo=' }];
+
+        ctx.onStreamDone({
+            model: 'gpt-5.6-luna',
+            dbMsg: { id: 'a-image', role: 'assistant', content: '', reasoning: 'Using image generation tool', parentId: 'u-image', attachments }
+        });
+
+        assert.strictEqual(ctx.chatMessages.length, 2);
+        assert.strictEqual(ctx.chatMessages[1].id, 'a-image');
+        assert.strictEqual(ctx.chatMessages[1].attachments.length, 1, 'persisted attachments must survive into chatMessages');
+        assert.strictEqual(ctx.chatMessages[1].attachments[0].id, 'att-1');
+        assert.strictEqual(renders, 1, 'generated attachment must render immediately');
+        assert.strictEqual(actionsAdded, 0, 'the stale streaming bubble should not receive actions before re-render');
+    });
+});
+
 describe('onStreamDone single-shot responses (bug #229)', () => {
     // Bug #229: a NON-STREAMING (single-shot) chat response - e.g. a chat-mode
     // command with "Stream Response" OFF, like the default Summarize command -
@@ -533,6 +570,16 @@ describe('onStreamDone single-shot responses (bug #229)', () => {
         });
         assert.strictEqual(ctx.chatMessages.length, 1, 'a wrong-thread single-shot response must not be pushed');
         assert.strictEqual(renders(), 0);
+    });
+});
+
+describe('Codex image streamDone serialization contract', () => {
+    it('passes the sending thread id when rebuilding the persisted assistant payload', () => {
+        const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'chat', 'streaming', 'StreamCompletion.ahk'), 'utf-8');
+        assert.ok(
+            src.includes('buildStructuredMessagesFromPath([path[path.Length]], streamThreadId)[1]'),
+            'streamDone dbMsg must include the thread id so generated attachments are loaded'
+        );
     });
 });
 

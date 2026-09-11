@@ -24,7 +24,8 @@ function _sendAllSettings(immediate) {
       temperature: temperatureToSend,
       reasoningOverrideSet: s.reasoningOverrideSet === true,
       temperatureOverrideSet: s.temperatureOverrideSet === true,
-      webSearch: !!s.webSearch
+      webSearch: !!s.webSearch,
+      imageGeneration: !!s.imageGeneration
     });
   };
   if (immediate) {
@@ -40,6 +41,15 @@ function _sendAllSettings(immediate) {
 
 function _supportsTemperatureValue(value) {
   return !(value === false || value === 0 || value === '0' || value === 'false');
+}
+
+function _isCodexImageModel(model) {
+  return typeof model === 'string' && model.toLowerCase().indexOf('codex/') === 0;
+}
+
+function _effectiveImageGenerationModel(settings) {
+  var s = settings || {};
+  return s.assistantName ? (s.assistantBaseModel || '') : (s.model || '');
 }
 
 function _updateModelCard() {
@@ -190,6 +200,9 @@ function _makeAssistantClickHandler(el, asstId) {
     window._currentSettings.assistantName = selectedAssistant ? (selectedAssistant.name || '') : '';
     window._currentSettings.assistantBaseModel = selectedAssistant ? (selectedAssistant.baseModel || '') : '';
     window._currentSettings.assistantDescription = selectedAssistant ? (selectedAssistant.description || '') : '';
+    if (!_isCodexImageModel(_effectiveImageGenerationModel(window._currentSettings)))
+      window._currentSettings.imageGeneration = false;
+    if (typeof _syncImageGenerationToggle === 'function') _syncImageGenerationToggle();
     window._currentSettings.reasoning = selectedAssistant && selectedAssistant.reasoning != null
       ? selectedAssistant.reasoning : '';
     window._currentSettings.temperature = selectedAssistant && selectedAssistant.temperature != null
@@ -252,6 +265,7 @@ function _makeModelClickHandler(el, fullId, supportsTemperature) {
         if (!window._currentSettings) window._currentSettings = {};
         var wasAssistant = !!window._currentSettings.assistantName;
         window._currentSettings.model = fullId;
+        if (!_isCodexImageModel(fullId)) window._currentSettings.imageGeneration = false;
         // Clear assistant when user explicitly picks a model
         window._currentSettings.assistantName = '';
         window._currentSettings.assistantBaseModel = '';
@@ -268,6 +282,7 @@ function _makeModelClickHandler(el, fullId, supportsTemperature) {
         window._currentSettings.temperatureOverrideSet = false;
         var temperatureSupported = _supportsTemperatureValue(supportsTemperature);
         window._currentSettings.supportsTemperature = temperatureSupported;
+        if (typeof _syncImageGenerationToggle === 'function') _syncImageGenerationToggle();
         var tempSlider = document.getElementById('tempSlider');
         if (tempSlider) {
             var tempField = tempSlider.parentElement;

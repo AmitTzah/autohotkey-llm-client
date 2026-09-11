@@ -221,6 +221,16 @@ describe('_makeModelClickHandler — keeps reasoning, clears assistant overrides
     });
 });
 
+describe('Image Generation model gating', () => {
+    it('clears imageGeneration synchronously when switching from Codex to a non-Codex model', () => {
+        const ctx = loadSettingsModule();
+        ctx.window._currentSettings = { model: 'codex/gpt-5.6-luna', imageGeneration: true, assistantName: '', reasoning: '', temperature: '' };
+        const mockEl = { classList: { add: function() {} } };
+        ctx._makeModelClickHandler(mockEl, 'deepseek/deepseek-v4-flash', true)();
+        assert.strictEqual(ctx.window._currentSettings.imageGeneration, false);
+    });
+});
+
 describe('_makeAssistantClickHandler — updates mode before posting', () => {
     it('sets assistant state synchronously so an immediate send cannot flush the old model', () => {
         const ctx = loadSettingsModule();
@@ -237,6 +247,15 @@ describe('_makeAssistantClickHandler — updates mode before posting', () => {
         assert.strictEqual(ctx.window._currentSettings.assistantName, 'Immediate Assistant');
         assert.strictEqual(ctx.window._currentSettings.assistantBaseModel, 'deepseek/deepseek-v4-flash');
         assert.strictEqual(ctx.window._currentSettings.systemMessage, 'assistant prompt');
+    });
+
+    it('clears imageGeneration when a non-Codex assistant becomes effective', () => {
+        const ctx = loadSettingsModule();
+        ctx.window._currentSettings = { model: 'codex/gpt-5.6-luna', imageGeneration: true, assistantName: '' };
+        ctx.window._assistantList = [{ id: 'a-img', name: 'No Image', baseModel: 'deepseek/deepseek-v4-flash', systemMessage: '', description: '' }];
+        const mockEl = { parentElement: { querySelectorAll: () => [] }, classList: { add: () => {} } };
+        ctx._makeAssistantClickHandler(mockEl, 'a-img')();
+        assert.strictEqual(ctx.window._currentSettings.imageGeneration, false);
     });
 
     it('also replaces direct-model reasoning and temperature before an immediate send', () => {
@@ -273,6 +292,20 @@ describe('_sendAllSettings', () => {
         assert.strictEqual(payload.action, 'updateModelSettings');
         assert.strictEqual(payload.codeExecution, undefined, 'codeExecution stub was removed');
         assert.strictEqual(payload.webSearch, true);
+        assert.strictEqual(payload.imageGeneration, false);
+    });
+
+    it('includes the Codex image-generation flag in the settings payload', () => {
+        const ctx = loadSettingsModule();
+        const posted = [];
+        ctx.window.chrome.webview.postMessage = (m) => posted.push(m);
+        ctx.window._currentSettings = {
+            model: 'codex/gpt-5.6-luna', systemMessage: '', reasoning: '', temperature: '',
+            webSearch: false, imageGeneration: true
+        };
+        ctx._sendAllSettings();
+        const payload = JSON.parse(posted[0]);
+        assert.strictEqual(payload.imageGeneration, true);
     });
 
     it('includes explicit empty override flags in the payload', () => {

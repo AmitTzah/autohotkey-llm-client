@@ -59,6 +59,8 @@ _applyAssistantToRequestParams(asst) {
     requestParams["reasoningOverrideSet"] := false
     requestParams["temperatureOverrideSet"] := false
     requestParams["activeAssistantId"] := asst.id
+    if ModelParser.Split(asst.baseModel).provider != "codex"
+        requestParams["imageGeneration"] := false
     _updateProviderFromModel(asst.baseModel)
 }
 
@@ -151,7 +153,9 @@ handleSwitchAssistant(parsed) {
             modelOverride: "",
             systemOverride: "",
             reasoningOverride: "",
-            temperatureOverride: ""
+            temperatureOverride: "",
+            webSearch: requestParams.Has("webSearch") ? requestParams["webSearch"] : false,
+            imageGeneration: requestParams.Has("imageGeneration") ? requestParams["imageGeneration"] : false
         })
     }
 
@@ -180,6 +184,7 @@ handleModelSettingsUpdate(parsed) {
             systemOverrideSet := true
     }
     webSearch := _BoolFrom(parsed.Get("webSearch", false))
+    imageGeneration := _BoolFrom(parsed.Get("imageGeneration", false))
 
     ; Only clear assistant when user explicitly changes the model (non-empty).
     ; When model is empty, the user is adjusting side settings (reasoning, temperature, etc.)
@@ -200,6 +205,9 @@ handleModelSettingsUpdate(parsed) {
     requestParams["reasoningOverrideSet"] := reasoningOverrideSet
     requestParams["temperatureOverrideSet"] := temperatureOverrideSet
     requestParams["webSearch"] := webSearch
+    ; UI state is not a security boundary: only the effective Codex provider
+    ; may retain this per-thread permission.
+    requestParams["imageGeneration"] := ModelParser.Split(requestParams["singleAPIModelName"]).provider = "codex" && imageGeneration
 
     ; Persist to DB
     if activeThreadId {

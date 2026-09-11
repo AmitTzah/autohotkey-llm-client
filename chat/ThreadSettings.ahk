@@ -17,6 +17,7 @@ class ThreadSettings {
             reasoning: "",
             temperature: "",
             webSearch: row.HasOwnProp("webSearch") ? row.webSearch : false,
+            imageGeneration: row.HasOwnProp("imageGeneration") ? row.imageGeneration : false,
             fontSize: (row.HasOwnProp("fontSize") && row.fontSize) ? row.fontSize : 17,
             assistantName: "",
             assistantBaseModel: "",
@@ -53,6 +54,7 @@ class ThreadSettings {
             eff.assistantBaseModel := asst.baseModel
             eff.assistantDescription := asst.HasOwnProp("description") ? asst.description : ""
         }
+        eff.imageGeneration := ModelParser.Split(eff.model).provider = "codex" && eff.imageGeneration
         return eff
     }
 
@@ -74,6 +76,7 @@ class ThreadSettings {
         requestParams["temperatureOverrideSet"] := eff.temperatureOverrideSet
         requestParams["fontSize"] := eff.fontSize
         requestParams["webSearch"] := eff.webSearch
+        requestParams["imageGeneration"] := ModelParser.Split(requestParams["singleAPIModelName"]).provider = "codex" && (settings.HasOwnProp("imageGeneration") ? settings.imageGeneration : false)
         if eff.assistantId
             requestParams["activeAssistantId"] := eff.assistantId
     }
@@ -88,6 +91,7 @@ class ThreadSettings {
         requestParams["reasoningOverrideSet"] := false
         requestParams["temperatureOverrideSet"] := false
         requestParams["webSearch"] := false
+        requestParams["imageGeneration"] := false
         if requestParams.Has("activeAssistantId")
             requestParams.Delete("activeAssistantId")
         if requestParams.Has("fontSize")
@@ -109,6 +113,7 @@ class ThreadSettings {
             reasoningOverrideSet: requestParams.Has("reasoningOverrideSet") ? requestParams["reasoningOverrideSet"] : false,
             temperatureOverrideSet: requestParams.Has("temperatureOverrideSet") ? requestParams["temperatureOverrideSet"] : false,
             webSearch: requestParams.Has("webSearch") ? requestParams["webSearch"] : false,
+            imageGeneration: ModelParser.Split(requestParams["singleAPIModelName"]).provider = "codex" && requestParams.Has("imageGeneration") && requestParams["imageGeneration"],
             fontSize: requestParams.Has("fontSize") ? requestParams["fontSize"] : defaultFontSize
         }
     }
@@ -123,6 +128,7 @@ class ThreadSettings {
         defaultFontSize := IsSet(responseWindowFontSize) ? responseWindowFontSize : "17"
         fontSize := requestParams.Has("fontSize") ? requestParams["fontSize"] : defaultFontSize
         webSearch := requestParams.Has("webSearch") ? requestParams["webSearch"] : false
+        imageGeneration := ModelParser.Split(model).provider = "codex" && requestParams.Has("imageGeneration") && requestParams["imageGeneration"]
 
         assistantName := ""
         assistantBaseModel := ""
@@ -154,6 +160,7 @@ class ThreadSettings {
             reasoningOverrideSet: requestParams.Has("reasoningOverrideSet") ? requestParams["reasoningOverrideSet"] : false,
             temperatureOverrideSet: requestParams.Has("temperatureOverrideSet") ? requestParams["temperatureOverrideSet"] : false,
             webSearch: webSearch,
+            imageGeneration: imageGeneration,
             fontSize: fontSize,
             assistantName: assistantName,
             assistantBaseModel: assistantBaseModel,

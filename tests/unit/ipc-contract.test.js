@@ -53,7 +53,7 @@ describe('ipc-contract validate', () => {
     assert.deepStrictEqual(contract.validate('dismissLockedThread', {}, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('getThreadLockInfo', { threadId: 't1' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('chatSend', { message: 'hi', attachments: [] }, 'web->ahk'), []);
-    assert.deepStrictEqual(contract.validate('updateModelSettings', { model: 'm', systemMessage: '', reasoning: '', temperature: '', webSearch: false }, 'web->ahk'), []);
+    assert.deepStrictEqual(contract.validate('updateModelSettings', { model: 'm', systemMessage: '', reasoning: '', temperature: '', webSearch: false, imageGeneration: false }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('sidebarAction', { subAction: 'moveToFolder', threadId: 't', folderId: 'f' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('ack', { reqId: 'r1', action: 'saveSettings', ok: true }, 'ahk->web'), []);
   });

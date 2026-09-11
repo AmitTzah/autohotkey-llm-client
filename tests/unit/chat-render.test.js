@@ -180,6 +180,20 @@ describe('createMessageBubble — assistant', () => {
         assert.ok(bubble.className.includes('bot'));
     });
 
+    it('renders reasoning and an image attachment for an empty-content assistant message', () => {
+        const ctx = loadRenderModule();
+        const bubble = ctx.createMessageBubble({
+            role: 'assistant',
+            content: '',
+            reasoning: '**Using image generation tool**',
+            model: 'gpt-5.6-luna',
+            id: 'a-image',
+            attachments: [{ id: 'att-image', attachment_type: 'image', mime_type: 'image/png', original_filename: 'codex-generated-1.png', file_size: 3395107, base64: 'iVBORw0KGgo=' }]
+        }, 1);
+        assert.ok(bubble.querySelector('.thinking-block'), 'assistant reasoning should still render');
+        assert.ok(bubble.querySelector('.msg-attachment-image'), 'assistant image attachment should render');
+    });
+
     it('creates non-null bubble for assistant without reasoning', () => {
         const ctx = loadRenderModule();
         const bubble = ctx.createMessageBubble({ role: 'assistant', content: 'Answer', id: 'a1' }, 1);
@@ -369,9 +383,10 @@ describe('_buildAttachmentHtml', () => {
         assert.strictEqual(ctx._buildAttachmentHtml({}), '');
     });
 
-    it('returns empty for non-user roles', () => {
+    it('renders image attachments for assistant messages', () => {
         const ctx = loadRenderModule();
-        assert.strictEqual(ctx._buildAttachmentHtml({ role: 'assistant', attachments: [{ attachment_type: 'image' }] }), '');
+        const html = ctx._buildAttachmentHtml({ role: 'assistant', attachments: [{ attachment_type: 'image', base64: 'abc123', mime_type: 'image/png', original_filename: 'generated.png' }] });
+        assert.ok(html.indexOf('msg-attachment-image') >= 0);
     });
 
     it('returns image HTML for image attachments', () => {

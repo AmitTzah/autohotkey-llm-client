@@ -49,6 +49,88 @@ class CodexCliTransportTest {
             throw Error("AhkLLM must not override Codex's standalone search feature; --search and web_search mode own that contract")
     }
 
+    RuntimeArgs_ImageGenerationIsExplicitAndKeepsOtherLockdown() {
+        offArgs := CodexCliRuntime.Join(CodexCliRuntime.BuildExecArgs("gpt-5.6-luna", "C:\\w", "C:\\i", "C:\\o", "", false, false), " ")
+        onArgs := CodexCliRuntime.Join(CodexCliRuntime.BuildExecArgs("gpt-5.6-luna", "C:\\w", "C:\\i", "C:\\o", "", false, true), " ")
+        if !InStr(offArgs, "--disable image_generation")
+            throw Error("Image Generation OFF must keep image_generation disabled")
+        if InStr(onArgs, "--disable image_generation")
+            throw Error("Image Generation ON must omit only the image_generation disable")
+        for feature in ["shell_tool", "unified_exec", "view_image", "code_mode", "apps", "multi_agent", "plugins", "browser_use", "computer_use"] {
+            if !InStr(onArgs, "--disable " feature)
+                throw Error("Image Generation ON weakened unrelated Codex lockdown: " feature)
+        }
+    }
+
+    RuntimeArgs_InputImagesUseExplicitFlagsWithoutEnablingViewImage() {
+        image1 := A_Temp "\\AhkLLM_Codex_Input_1_" A_TickCount ".png"
+        image2 := A_Temp "\\AhkLLM_Codex_Input_2_" A_TickCount ".png"
+        try {
+            FileOpen(image1, "w", "UTF-8-RAW").Write("one")
+            FileOpen(image2, "w", "UTF-8-RAW").Write("two")
+            args := CodexCliRuntime.BuildExecArgs(
+                "gpt-5.6-luna", "C:\\w", "C:\\i", "C:\\o", "", false, false, [image1, image2]
+            )
+            found := []
+            for i, arg in args {
+                if arg = "--image" && i < args.Length
+                    found.Push(args[i + 1])
+            }
+            if found.Length != 2 || found[1] != image1 || found[2] != image2
+                throw Error("Codex input images must be passed as ordered repeatable --image flags")
+            if !InStr(CodexCliRuntime.Join(args, " "), "--disable view_image")
+                throw Error("Explicit input images must not enable Codex's local view_image tool")
+        } finally {
+            if FileExist(image1)
+                FileDelete(image1)
+            if FileExist(image2)
+                FileDelete(image2)
+        }
+    }
+
+    ImageGenerationPermission_FailsClosedOutsideEffectiveCodexModel() {
+        codex := { providerKey: "codex", transport: "codex-cli" }
+        http := { providerKey: "openai", transport: "http" }
+        codexScope := { params: Map("singleAPIModelName", "codex/gpt-5.6-luna") }
+        otherScope := { params: Map("singleAPIModelName", "openai/gpt-5-mini") }
+        if !CodexCliTransport._ImageGenerationAllowed(codex, codexScope, true)
+            throw Error("Effective codex/... request should allow the explicit image-generation permission")
+        if CodexCliTransport._ImageGenerationAllowed(codex, otherScope, true)
+            throw Error("Non-Codex effective model must fail closed even with Codex transport metadata")
+        if CodexCliTransport._ImageGenerationAllowed(http, codexScope, true)
+            throw Error("Non-Codex transport/provider must fail closed")
+        if CodexCliTransport._ImageGenerationAllowed(codex, codexScope, false)
+            throw Error("Explicit OFF must remain disabled")
+    }
+
+    GeneratedImages_UseObservedThreadIdAndAcceptOnlyValidatedPng() {
+        root := A_Temp "\\AhkLLM_Codex_ImageRoot_" A_TickCount "_" Random(1000, 999999)
+        threadId := "01a08af9-ba38-76c1-a2e3-7dd770ff6230"
+        dir := root "\\" threadId
+        DirCreate(dir)
+        goodPath := dir "\\exec-test.png"
+        badPath := dir "\\exec-bad.png"
+        try {
+            png := ImageUtils._Base64Decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z7ZsAAAAASUVORK5CYII=")
+            f := FileOpen(goodPath, "w")
+            f.RawWrite(png, png.Size)
+            f.Close()
+            FileOpen(badPath, "w", "UTF-8-RAW").Write("not a png")
+            events := '{"type":"thread.started","thread_id":"' threadId '"}`n'
+                . '{"type":"item.completed","item":{"type":"agent_message","text":""}}`n'
+            if CodexCliTransport.ExtractThreadId(events) != threadId
+                throw Error("thread.started thread_id must drive generated image correlation")
+            images := CodexCliTransport.DiscoverGeneratedImages(events, root)
+            if images.Length != 1
+                throw Error("Expected exactly one validated generated PNG, got " images.Length)
+            image := images[1]
+            if image["mimeType"] != "image/png" || image["type"] != "image" || image["size"] <= 0 || image["base64"] = ""
+                throw Error("Generated PNG was not converted into the existing attachment shape")
+        } finally {
+            try DirDelete(root, true)
+        }
+    }
+
     RuntimeArgs_InvalidModelAndReasoningFailBeforeSpawn() {
         threwModel := false
         try CodexCliRuntime.BuildExecArgs("bad & model", "C:\\w", "C:\\i", "C:\\o")

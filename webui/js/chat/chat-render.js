@@ -203,7 +203,7 @@ function createMessageBubble(msg, index) {
     // as user content - markdown-it's breaks:true then keeps single-newline
     // paragraph breaks visible instead of collapsing them into one block.
     contentHtml = md.render(_prepUserContent(msg.content));
-    middleHtml = _buildReasoningHtml(msg);
+    middleHtml = _buildReasoningHtml(msg) + _buildAttachmentHtml(msg);
     editUiHtml = _buildEditUiHtml(msg);
   } else {
     roleClass = 'system';
@@ -308,7 +308,7 @@ function _formatFileSize(bytes) {
 }
 
 function _buildAttachmentHtml(msg) {
-  if (!msg.attachments || !msg.attachments.length || msg.role !== 'user') return '';
+  if (!msg.attachments || !msg.attachments.length) return '';
   var html = '';
   var hasScannedPDF = false;
 

@@ -146,6 +146,7 @@ function _persistStreamedMessage(content, modelName, dbMsg) {
     if (dbMsg.cachedTokens !== undefined) msg.cachedTokens = dbMsg.cachedTokens;
     if (dbMsg.responseTimeMs !== undefined) msg.responseTimeMs = dbMsg.responseTimeMs;
     if (dbMsg.ttftMs !== undefined) msg.ttftMs = dbMsg.ttftMs;
+    if (dbMsg.attachments) msg.attachments = dbMsg.attachments;
     if (streamState.bubble && dbMsg.id) {
       streamState.bubble.dataset.msgId = dbMsg.id;
     }
@@ -222,7 +223,15 @@ function onStreamDone(data) {
   // never lands in chatMessages and the bubble has no Copy/Retry/etc until reload.
   if (isCurrent && (streamState.contentBuffer || streamState.thinkingBuffer)) {
     _persistStreamedMessage(streamState.contentBuffer, modelName, dbMsg);
-    if (streamState.bubble) addStreamingActions(streamState.bubble, chatMessages.length - 1);
+    var hasPersistedAttachments = !!(dbMsg && dbMsg.attachments && dbMsg.attachments.length);
+    if (hasPersistedAttachments && typeof renderChatMessages === 'function') {
+      // The live streaming bubble only knows about streamed text/reasoning.
+      // Re-render from the persisted DB payload so generated attachments are
+      // visible immediately instead of only after a thread reload.
+      renderChatMessages(chatMessages);
+    } else if (streamState.bubble) {
+      addStreamingActions(streamState.bubble, chatMessages.length - 1);
+    }
   } else if (isCurrent && dbMsg && dbMsg.role === 'assistant') {
     // Single-shot responses have empty streaming buffers, so use the persisted message payload.
     // AHK persists the assistant row and posts streamDone with dbMsg, so render

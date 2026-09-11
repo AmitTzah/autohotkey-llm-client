@@ -57,7 +57,7 @@ class CodexCliRuntime {
         ]
     }
 
-    static BuildExecArgs(modelId, workingDir, instructionFile, outputFile, reasoning := "", webSearch := false) {
+    static BuildExecArgs(modelId, workingDir, instructionFile, outputFile, reasoning := "", webSearch := false, imageGeneration := false, inputImages := "") {
         modelId := CodexCliRuntime.ValidateModelId(modelId)
         reasoning := CodexCliRuntime.ValidateReasoning(reasoning)
         ; Use Codex's documented top-level --search switch for search turns.
@@ -94,8 +94,21 @@ class CodexCliRuntime {
             "--config", "hooks={}",
             "--config", "shell_environment_policy.inherit=" CodexCliRuntime.TomlString("none")
         )
-        for feature in CodexCliRuntime.DisabledFeatures()
+        if IsObject(inputImages) {
+            for imagePath in inputImages {
+                imagePath := String(imagePath)
+                if imagePath = "" || !FileExist(imagePath)
+                    throw Error("Codex input image is missing: " imagePath)
+                args.Push("--image", imagePath)
+            }
+        }
+        for feature in CodexCliRuntime.DisabledFeatures() {
+            ; This turn-level permission may expose only Codex image generation.
+            ; Every other safety disable remains unchanged.
+            if imageGeneration && feature = "image_generation"
+                continue
             args.Push("--disable", feature)
+        }
         if reasoning != ""
             args.Push("--config", "model_reasoning_effort=" CodexCliRuntime.TomlString(reasoning))
         return args

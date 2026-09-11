@@ -53,10 +53,14 @@ class ThreadRepo {
         }
         if settings.HasOwnProp("fontSize")
             parts.Push("font_size = ?") params.Push(settings.fontSize ? settings.fontSize : 17)
-        if settings.HasOwnProp("webSearch") {
+        if settings.HasOwnProp("webSearch") || settings.HasOwnProp("imageGeneration") {
+            currentSettings := ThreadRepo.GetSettings(threadId)
+            currentWebSearch := currentSettings ? currentSettings.webSearch : false
+            currentImageGeneration := currentSettings ? currentSettings.imageGeneration : false
             togglesJson := jsongo.Stringify({
-                webSearch: ThreadRepo._ToBool(settings.webSearch)
+                webSearch: settings.HasOwnProp("webSearch") ? ThreadRepo._ToBool(settings.webSearch) : currentWebSearch, imageGeneration: settings.HasOwnProp("imageGeneration") ? ThreadRepo._ToBool(settings.imageGeneration) : currentImageGeneration
             })
+            togglesJson := ThreadRepo._MergeAdvancedToggles(threadId, togglesJson)
             parts.Push("advanced_toggles = ?") params.Push(togglesJson)
         }
         if parts.Length {
@@ -69,16 +73,30 @@ class ThreadRepo {
         }
     }
 
+    static _MergeAdvancedToggles(threadId, updatesJson) {
+        updates := jsongo.Parse(updatesJson)
+        current := ChatDB.db.Query("SELECT advanced_toggles FROM chat_threads WHERE id=?;", threadId)
+        if !current.count || !current[1, "advanced_toggles"]
+            return updatesJson
+        try existing := jsongo.Parse(current[1, "advanced_toggles"])
+        catch
+            return updatesJson
+        for key, value in updates
+            existing[key] := value
+        return jsongo.Stringify(existing)
+    }
+
     ; Get per-thread settings.
     static GetSettings(threadId) {
         table := ChatDB.db.Query("SELECT assistant_id, model_override, system_override, reasoning_override, temperature_override, system_override_set, reasoning_override_set, temperature_override_set, font_size, advanced_toggles FROM chat_threads WHERE id=?;", threadId)
         if table.count {
             row := table[1]
-            webSearch := false
+            webSearch := false, imageGeneration := false
             if row.advanced_toggles {
                 try {
                     toggles := jsongo.Parse(row.advanced_toggles)
                     webSearch := toggles.Has("webSearch") ? ThreadRepo._ToBool(toggles["webSearch"]) : false
+                    imageGeneration := toggles.Has("imageGeneration") ? ThreadRepo._ToBool(toggles["imageGeneration"]) : false
                 } catch {
                     debugLog("[THREAD] Failed to parse advanced_toggles for " threadId)
                 }
@@ -93,6 +111,7 @@ class ThreadRepo {
                 reasoningOverrideSet: ThreadRepo._ToBool(row.reasoning_override_set),
                 temperatureOverrideSet: ThreadRepo._ToBool(row.temperature_override_set),
                 webSearch: webSearch,
+                imageGeneration: imageGeneration,
                 fontSize: row.font_size ? row.font_size : 17
             }
         }

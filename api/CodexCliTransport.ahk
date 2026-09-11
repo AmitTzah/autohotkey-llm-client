@@ -35,7 +35,13 @@ class CodexCliTransport {
         . "Local files, shell commands, apps, plugins, MCP tools, subagents, and local execution are not available.`n"
         . "When AhkLLM enables first-party Codex web search for the turn, use it whenever the user asks to search, browse, look up current information, or otherwise requires fresh web data. Do not claim search is unavailable without attempting the provided web-search capability. When search is disabled, answer without web access."
 
-    static ExecuteRequest(providerInfo, requestFile, outputFile, errorFile, cancelState := "", webSearch := false, reasoning := "", progressCallback := "") {
+    static ExecuteRequest(providerInfo, requestFile, outputFile, errorFile, cancelState := "", webSearch := false, reasoning := "", progressCallback := "", imageGeneration := "") {
+        imageGeneration := CodexCliTransport._ImageGenerationAllowed(providerInfo, cancelState, imageGeneration)
+        if imageGeneration = "" {
+            imageGeneration := false
+            if IsObject(cancelState) && cancelState.HasOwnProp("params")
+                imageGeneration := cancelState.params.Has("imageGeneration") && cancelState.params["imageGeneration"]
+        }
         CodexCliTransport._Trace(cancelState, "codex.transport.enter")
         unique := A_TickCount "_" Random(1000, 999999)
         prefix := A_Temp "\AhkLLM_Codex_" unique
@@ -64,7 +70,9 @@ class CodexCliTransport {
             FileOpen(instructionFile, "w", "UTF-8-RAW").Write(prepared.instructions)
             CodexCliTransport._Trace(cancelState, "codex.request-files.ready")
 
-            args := CodexCliRuntime.BuildExecArgs(providerInfo.modelName, workDir, instructionFile, finalFile, reasoning, webSearch)
+            inputImages := IsObject(cancelState) && cancelState.HasOwnProp("params") && cancelState.params.Has("_codexInputImages")
+                ? cancelState.params["_codexInputImages"] : []
+            args := CodexCliRuntime.BuildExecArgs(providerInfo.modelName, workDir, instructionFile, finalFile, reasoning, webSearch, imageGeneration, inputImages)
             batch := CodexCliRuntime.BuildBatch(CodexCliRuntime.Executable(), args, promptFile, eventsFile, errorFile, statusFile)
             FileOpen(batchFile, "w", "UTF-8-RAW").Write(batch)
             debugLog("provider=codex model=" providerInfo.modelName " webSearch=" (webSearch ? "live" : "disabled") " reasoning=" reasoning, "CodexCliTransport")
@@ -80,25 +88,25 @@ class CodexCliTransport {
                 CodexCliTransport._NormalizeErrorFile(errorFile, exitCode)
                 return { success: false, cancelled: false, exitCode: exitCode }
             }
-            if !FileExist(finalFile) {
-                FileOpen(errorFile, "w", "UTF-8-RAW").Write("Codex CLI completed without producing a final response.")
-                return { success: false, cancelled: false, exitCode: exitCode }
-            }
-            answer := FileRead(finalFile, "UTF-8")
-            CodexCliTransport._Trace(cancelState, "codex.final-file.read", "chars=" StrLen(answer))
-            if Trim(answer) = "" {
-                FileOpen(errorFile, "w", "UTF-8-RAW").Write("Codex CLI returned an empty final response.")
-                return { success: false, cancelled: false, exitCode: exitCode }
-            }
             eventsText := FileExist(eventsFile) ? FileRead(eventsFile, "UTF-8") : ""
+            generatedAttachments := imageGeneration ? CodexCliTransport.DiscoverGeneratedImages(eventsText) : []
+            answer := FileExist(finalFile) ? FileRead(finalFile, "UTF-8") : ""
+            CodexCliTransport._Trace(cancelState, "codex.final-file.read", "chars=" StrLen(answer) " images=" generatedAttachments.Length)
+            if Trim(answer) = "" && !generatedAttachments.Length {
+                message := FileExist(finalFile)
+                    ? "Codex CLI returned an empty final response."
+                    : "Codex CLI completed without producing a final response."
+                FileOpen(errorFile, "w", "UTF-8-RAW").Write(message)
+                return { success: false, cancelled: false, exitCode: exitCode }
+            }
             usage := CodexCliTransport.ExtractUsage(eventsText)
             webSearchCalls := CodexCliTransport.CountWebSearches(eventsText)
             thoughtSummary := CodexCliTransport.ExtractThoughtSummary(eventsText)
-            debugLog("webSearchRequested=" (webSearch ? "true" : "false") " webSearchCalls=" webSearchCalls, "CodexCliTransport")
+            debugLog("webSearchRequested=" (webSearch ? "true" : "false") " webSearchCalls=" webSearchCalls " generatedImages=" generatedAttachments.Length, "CodexCliTransport")
             responseJson := CodexCliTransport.BuildSyntheticResponse(providerInfo.modelName, answer, usage)
             FileOpen(outputFile, "w", "UTF-8-RAW").Write(responseJson)
-            CodexCliTransport._Trace(cancelState, "codex.synthetic-response.written", "chars=" StrLen(answer))
-            return { success: true, cancelled: false, usage: usage, response: answer, events: eventsText, webSearchCalls: webSearchCalls, thoughtSummary: thoughtSummary }
+            CodexCliTransport._Trace(cancelState, "codex.synthetic-response.written", "chars=" StrLen(answer) " images=" generatedAttachments.Length)
+            return { success: true, cancelled: false, usage: usage, response: answer, events: eventsText, webSearchCalls: webSearchCalls, thoughtSummary: thoughtSummary, generatedAttachments: generatedAttachments }
         } catch Error as e {
             try FileOpen(errorFile, "w", "UTF-8-RAW").Write("Codex CLI request failed: " e.Message)
             debugLog("Codex transport error: " e.Message "`n" e.Stack, "CodexCliTransport")
@@ -113,7 +121,13 @@ class CodexCliTransport {
 
     ; Start a Codex request without blocking the AHK/WebView UI thread for the
     ; lifetime of `codex exec`. The caller owns polling via PollRequest().
-    static BeginRequest(providerInfo, requestFile, outputFile, errorFile, cancelState := "", webSearch := false, reasoning := "", progressCallback := "") {
+    static BeginRequest(providerInfo, requestFile, outputFile, errorFile, cancelState := "", webSearch := false, reasoning := "", progressCallback := "", imageGeneration := "") {
+        imageGeneration := CodexCliTransport._ImageGenerationAllowed(providerInfo, cancelState, imageGeneration)
+        if imageGeneration = "" {
+            imageGeneration := false
+            if IsObject(cancelState) && cancelState.HasOwnProp("params")
+                imageGeneration := cancelState.params.Has("imageGeneration") && cancelState.params["imageGeneration"]
+        }
         CodexCliTransport._Trace(cancelState, "codex.transport.enter")
         unique := A_TickCount "_" Random(1000, 999999)
         prefix := A_Temp "\AhkLLM_Codex_" unique
@@ -139,7 +153,9 @@ class CodexCliTransport {
             FileOpen(instructionFile, "w", "UTF-8-RAW").Write(prepared.instructions)
             CodexCliTransport._Trace(cancelState, "codex.request-files.ready")
 
-            args := CodexCliRuntime.BuildExecArgs(providerInfo.modelName, workDir, instructionFile, finalFile, reasoning, webSearch)
+            inputImages := IsObject(cancelState) && cancelState.HasOwnProp("params") && cancelState.params.Has("_codexInputImages")
+                ? cancelState.params["_codexInputImages"] : []
+            args := CodexCliRuntime.BuildExecArgs(providerInfo.modelName, workDir, instructionFile, finalFile, reasoning, webSearch, imageGeneration, inputImages)
             batch := CodexCliRuntime.BuildBatch(CodexCliRuntime.Executable(), args, promptFile, eventsFile, errorFile, statusFile)
             FileOpen(batchFile, "w", "UTF-8-RAW").Write(batch)
             debugLog("provider=codex model=" providerInfo.modelName " webSearch=" (webSearch ? "live" : "disabled") " reasoning=" reasoning, "CodexCliTransport")
@@ -152,6 +168,7 @@ class CodexCliTransport {
             state.finalFile := finalFile
             state.eventsFile := eventsFile
             state.webSearch := webSearch
+            state.imageGeneration := imageGeneration
             state.tempPaths := tempPaths
             return state
         } catch Error as e {
@@ -242,25 +259,25 @@ class CodexCliTransport {
             CodexCliTransport._NormalizeErrorFile(state.errorFile, exitCode)
             return { success: false, cancelled: false, exitCode: exitCode }
         }
-        if !FileExist(state.finalFile) {
-            FileOpen(state.errorFile, "w", "UTF-8-RAW").Write("Codex CLI completed without producing a final response.")
-            return { success: false, cancelled: false, exitCode: exitCode }
-        }
-        answer := FileRead(state.finalFile, "UTF-8")
-        CodexCliTransport._Trace(state.cancelState, "codex.final-file.read", "chars=" StrLen(answer))
-        if Trim(answer) = "" {
-            FileOpen(state.errorFile, "w", "UTF-8-RAW").Write("Codex CLI returned an empty final response.")
-            return { success: false, cancelled: false, exitCode: exitCode }
-        }
         eventsText := FileExist(state.eventsFile) ? FileRead(state.eventsFile, "UTF-8") : ""
+        generatedAttachments := state.imageGeneration ? CodexCliTransport.DiscoverGeneratedImages(eventsText) : []
+        answer := FileExist(state.finalFile) ? FileRead(state.finalFile, "UTF-8") : ""
+        CodexCliTransport._Trace(state.cancelState, "codex.final-file.read", "chars=" StrLen(answer) " images=" generatedAttachments.Length)
+        if Trim(answer) = "" && !generatedAttachments.Length {
+            message := FileExist(state.finalFile)
+                ? "Codex CLI returned an empty final response."
+                : "Codex CLI completed without producing a final response."
+            FileOpen(state.errorFile, "w", "UTF-8-RAW").Write(message)
+            return { success: false, cancelled: false, exitCode: exitCode }
+        }
         usage := CodexCliTransport.ExtractUsage(eventsText)
         webSearchCalls := CodexCliTransport.CountWebSearches(eventsText)
         thoughtSummary := CodexCliTransport.ExtractThoughtSummary(eventsText)
-        debugLog("webSearchRequested=" (state.webSearch ? "true" : "false") " webSearchCalls=" webSearchCalls, "CodexCliTransport")
+        debugLog("webSearchRequested=" (state.webSearch ? "true" : "false") " webSearchCalls=" webSearchCalls " generatedImages=" generatedAttachments.Length, "CodexCliTransport")
         responseJson := CodexCliTransport.BuildSyntheticResponse(state.providerInfo.modelName, answer, usage)
         FileOpen(state.outputFile, "w", "UTF-8-RAW").Write(responseJson)
-        CodexCliTransport._Trace(state.cancelState, "codex.synthetic-response.written", "chars=" StrLen(answer))
-        return { success: true, cancelled: false, usage: usage, response: answer, events: eventsText, webSearchCalls: webSearchCalls, thoughtSummary: thoughtSummary }
+        CodexCliTransport._Trace(state.cancelState, "codex.synthetic-response.written", "chars=" StrLen(answer) " images=" generatedAttachments.Length)
+        return { success: true, cancelled: false, usage: usage, response: answer, events: eventsText, webSearchCalls: webSearchCalls, thoughtSummary: thoughtSummary, generatedAttachments: generatedAttachments }
     }
 
     static _CleanupAsyncRequest(state) {
@@ -430,7 +447,7 @@ class CodexCliTransport {
                     if part.Has("text") && part["text"] != ""
                         pieces.Push(String(part["text"]))
                 } else if partType = "image_url" || partType = "input_image" {
-                    throw Error("Image input is not yet supported by the Codex CLI backend.")
+                    throw Error("Structured image content reached Codex without attachment-path conversion.")
                 }
             }
             return CodexCliRuntime.Join(pieces, "`n`n")
@@ -641,6 +658,153 @@ class CodexCliTransport {
         text := StrReplace(text, "`r", " ")
         text := StrReplace(text, "`n", " ")
         return StrLen(text) > 220 ? SubStr(text, 1, 217) "..." : text
+    }
+
+    ; Codex 0.154.0 does not project generated images into `exec --json`.
+    ; Correlate only through the observed thread.started.thread_id and the
+    ; Codex-owned generated_images directory; never accept a model-supplied path.
+    static ExtractThreadId(eventsText) {
+        for line in StrSplit(String(eventsText), "`n", "`r") {
+            if Trim(line) = ""
+                continue
+            try event := jsongo.Parse(line)
+            catch
+                continue
+            if !event.Has("type") || event["type"] != "thread.started" || !event.Has("thread_id")
+                continue
+            threadId := String(event["thread_id"])
+            return RegExMatch(threadId, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") ? threadId : ""
+        }
+        return ""
+    }
+
+    static GeneratedImagesRoot() {
+        ; Existing E2E workers are explicitly profile-isolated. Production
+        ; always uses Codex's real per-user output root.
+        if EnvGet("AHKLLM_E2E_WORKER") != "" {
+            e2eRoot := EnvGet("AHKLLM_E2E_DATA_DIR")
+            if e2eRoot != ""
+                return e2eRoot "\\codex-generated-images"
+        }
+        profile := EnvGet("USERPROFILE")
+        return profile != "" ? profile "\\.codex\\generated_images" : ""
+    }
+
+    static _ImageGenerationAllowed(providerInfo, cancelState, requested) {
+        if requested = "" {
+            requested := false
+            if IsObject(cancelState) && cancelState.HasOwnProp("params") && cancelState.params.Has("imageGeneration")
+                requested := cancelState.params["imageGeneration"]
+        }
+        if !requested || !IsObject(providerInfo)
+            return false
+        if !providerInfo.HasOwnProp("providerKey") || providerInfo.providerKey != "codex"
+            return false
+        if !providerInfo.HasOwnProp("transport") || providerInfo.transport != "codex-cli"
+            return false
+        ; When request scope is available, require the actual effective model to
+        ; carry the Codex provider prefix as well. UI state is never authoritative.
+        if IsObject(cancelState) && cancelState.HasOwnProp("params") && cancelState.params.Has("singleAPIModelName")
+            return SubStr(String(cancelState.params["singleAPIModelName"]), 1, 6) = "codex/"
+        return true
+    }
+
+    static DiscoverGeneratedImages(eventsText, generatedRoot := "") {
+        images := []
+        threadId := CodexCliTransport.ExtractThreadId(eventsText)
+        if threadId = ""
+            return images
+        root := generatedRoot != "" ? generatedRoot : CodexCliTransport.GeneratedImagesRoot()
+        if root = ""
+            return images
+        threadDir := root "\\" threadId
+        if !DirExist(threadDir)
+            return images
+        try rootAttrs := FileGetAttrib(root)
+        catch
+            return images
+        try dirAttrs := FileGetAttrib(threadDir)
+        catch
+            return images
+        if InStr(rootAttrs, "L") || InStr(dirAttrs, "L")
+            return images
+        index := 0
+        Loop Files threadDir "\\*.png", "F" {
+            try attrs := FileGetAttrib(A_LoopFileFullPath)
+            catch
+                continue
+            ; Reject links/reparse points so the directory cannot trampoline
+            ; AhkLLM into importing an unrelated local image.
+            if InStr(attrs, "L")
+                continue
+            attachment := CodexCliTransport._ValidatedGeneratedPng(A_LoopFileFullPath, ++index)
+            if IsObject(attachment)
+                images.Push(attachment)
+        }
+        return images
+    }
+
+    static _ValidatedGeneratedPng(path, index := 1) {
+        static MAX_IMAGE_BYTES := 32 * 1024 * 1024
+        try size := FileGetSize(path)
+        catch
+            return ""
+        if size < 8 || size > MAX_IMAGE_BYTES
+            return ""
+        try {
+            f := FileOpen(path, "r")
+            header := Buffer(8)
+            if f.RawRead(header, 8) != 8 {
+                f.Close()
+                return ""
+            }
+            expected := [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+            for i, byte in expected {
+                if NumGet(header, i - 1, "UChar") != byte {
+                    f.Close()
+                    return ""
+                }
+            }
+            f.Pos := 0
+            bytes := Buffer(size)
+            if f.RawRead(bytes, size) != size {
+                f.Close()
+                return ""
+            }
+            f.Close()
+            encoded := CodexCliTransport._Base64EncodeBuffer(bytes, size)
+            if encoded = ""
+                return ""
+            return Map(
+                "type", "image",
+                "filename", "codex-generated-" index ".png",
+                "base64", encoded,
+                "mimeType", "image/png",
+                "size", size,
+                "extractedText", ""
+            )
+        } catch Error as e {
+            debugLog("Codex generated image validation failed: " e.Message, "CodexCliTransport")
+            return ""
+        }
+    }
+
+    static _Base64EncodeBuffer(raw, size := 0) {
+        static CRYPT_STRING_BASE64 := 0x1
+        if !size
+            size := raw is Buffer ? raw.Size : StrLen(raw)
+        requiredSize := 0
+        DllCall("Crypt32.dll\CryptBinaryToStringA", "Ptr", raw is Buffer ? raw.Ptr : StrPtr(raw), "UInt", size,
+            "UInt", CRYPT_STRING_BASE64, "Ptr", 0, "UIntP", &requiredSize)
+        if requiredSize <= 0
+            return ""
+        buf := Buffer(requiredSize)
+        DllCall("Crypt32.dll\CryptBinaryToStringA", "Ptr", raw is Buffer ? raw.Ptr : StrPtr(raw), "UInt", size,
+            "UInt", CRYPT_STRING_BASE64, "Ptr", buf, "UIntP", &requiredSize)
+        result := StrGet(buf, requiredSize, "UTF-8")
+        result := StrReplace(result, "`r`n", "")
+        result := StrReplace(result, "`n", "")
+        return result
     }
 
     static ExtractUsage(eventsText) {

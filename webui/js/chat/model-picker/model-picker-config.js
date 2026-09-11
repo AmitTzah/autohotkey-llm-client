@@ -10,6 +10,15 @@ function _settingsBoolValue(value) {
   return value === true || value === 1 || value === '1' || value === 'true';
 }
 
+function _isCodexImageModel(model) {
+  return typeof model === 'string' && model.toLowerCase().indexOf('codex/') === 0;
+}
+
+function _effectiveImageGenerationModel(settings) {
+  var s = settings || {};
+  return s.assistantName ? (s.assistantBaseModel || '') : (s.model || '');
+}
+
 function openModelSettings() {
   // Settings are always visible in right panel — no modal to open
   // Request current settings from AHK
@@ -33,12 +42,15 @@ function populateCurrentSettings(settings) {
     assistantName: settings.assistantName || '',
     assistantBaseModel: settings.assistantBaseModel || '',
     assistantDescription: settings.assistantDescription || '',
-    webSearch: !!settings.webSearch,
+    webSearch: _settingsBoolValue(settings.webSearch),
+    imageGeneration: _settingsBoolValue(settings.imageGeneration),
     supportsTemperature: _supportsTemperatureValue(settings.supportsTemperature)
   };
 
   // Sync the composer Web Search toggle with the current settings
   _syncWebSearchToggle();
+
+  _syncImageGenerationToggle();
 
   // Apply per-chat font size
   if (settings.fontSize) {
@@ -155,10 +167,23 @@ function _syncWebSearchToggle() {
   }
 }
 
+function _syncImageGenerationToggle() {
+  if (!window._currentSettings) window._currentSettings = {};
+  var eligible = _isCodexImageModel(_effectiveImageGenerationModel(window._currentSettings));
+  if (!eligible) window._currentSettings.imageGeneration = false;
+  var row = document.getElementById('imageGenerationRow');
+  if (row) row.style.display = eligible ? '' : 'none';
+  var rail = document.getElementById('railImageGenerationToggle');
+  if (rail) {
+    if (eligible && window._currentSettings.imageGeneration) rail.classList.add('on');
+    else rail.classList.remove('on');
+  }
+}
+
 // Wire right panel controls
 if (typeof document !== 'undefined' && document.addEventListener) {
 document.addEventListener('DOMContentLoaded', function() {
-  window._currentSettings = { model: '', systemMessage: '', systemOverrideSet: false, reasoning: '', temperature: '', webSearch: false };
+  window._currentSettings = { model: '', systemMessage: '', systemOverrideSet: false, reasoning: '', temperature: '', webSearch: false, imageGeneration: false };
 
   // Temperature slider — auto-enable on interaction, reset to default
   var tempSlider = document.getElementById('tempSlider');
@@ -287,6 +312,19 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!window._currentSettings) window._currentSettings = {};
     window._currentSettings.webSearch = !window._currentSettings.webSearch;
     _syncWebSearchToggle();
+    _sendAllSettings();
+  });
+
+  var railImageGenerationToggle = document.getElementById('railImageGenerationToggle');
+  if (railImageGenerationToggle) railImageGenerationToggle.addEventListener('click', function() {
+    if (!window._currentSettings) window._currentSettings = {};
+    if (!_isCodexImageModel(_effectiveImageGenerationModel(window._currentSettings))) {
+      window._currentSettings.imageGeneration = false;
+      _syncImageGenerationToggle();
+      return;
+    }
+    window._currentSettings.imageGeneration = !window._currentSettings.imageGeneration;
+    _syncImageGenerationToggle();
     _sendAllSettings();
   });
 
