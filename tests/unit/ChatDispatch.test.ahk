@@ -575,6 +575,44 @@ class ChatDispatchTest {
         }
     }
 
+    Dispatch_OpenExternalUrl_UsesDefaultUrlHandler() {
+        global _mockRunCalls, _mockTitleGenOutput
+        _mockRunCalls := []
+        _mockTitleGenOutput := ""
+        web := this._captureWebView()
+        try {
+            OnWebMessageReceived("", this._args('{"action":"openExternalUrl","url":"https://example.com/news?id=42"}'))
+        } finally {
+            web.restore()
+        }
+        if _mockRunCalls.Length != 1
+            throw Error("Expected one Run call for an HTTPS link, got " _mockRunCalls.Length)
+        if _mockRunCalls[1] != "https://example.com/news?id=42"
+            throw Error("Unexpected URL handed to Run: " _mockRunCalls[1])
+    }
+
+    Dispatch_OpenExternalUrl_RejectsUnsafeSchemes() {
+        global _mockRunCalls, _mockTitleGenOutput
+        _mockRunCalls := []
+        _mockTitleGenOutput := ""
+        blockedUrls := [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "mailto:test@example.com",
+            "https://example.com/a b"
+        ]
+        for _, url in blockedUrls {
+            rejected := false
+            try _HandleOpenExternalUrl(Map("url", url))
+            catch Error
+                rejected := true
+            if !rejected
+                throw Error("Expected unsafe external URL to be rejected: " url)
+        }
+        if _mockRunCalls.Length != 0
+            throw Error("Unsafe external URLs must not call Run")
+    }
+
     Dispatch_WebViewReady_NoThread() {
         global activeThreadId
         old := activeThreadId

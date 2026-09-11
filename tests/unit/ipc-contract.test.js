@@ -47,6 +47,7 @@ describe('ipc-contract validate', () => {
     assert.deepStrictEqual(contract.validate('chatSend', { message: 'hi' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('requestSystemMessageFiles', {}, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('openSystemMessagesFolder', {}, 'web->ahk'), []);
+    assert.deepStrictEqual(contract.validate('openExternalUrl', { url: 'https://example.com' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('unlockThread', { threadId: 't1', passwordHash: 'h' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('setThreadLock', { threadId: 't1', mode: 'set', passwordHash: 'h', salt: 's', iterations: 1000, currentPasswordHash: '' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('lockChatNow', { threadId: 't1' }, 'web->ahk'), []);

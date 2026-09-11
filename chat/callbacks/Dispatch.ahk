@@ -61,6 +61,8 @@ OnWebMessageReceived(sender, args) {
             case "hideWindow":
                 global chatWindow
                 chatWindow.Hide()
+            case "openExternalUrl":
+                _HandleOpenExternalUrl(parsed)
             case "requestCurrentSettings":
                 postCurrentSettingsToWebView()
             case "showApiLogs":
@@ -444,6 +446,16 @@ _HandleOpenSystemMessagesFolder() {
     if !DirExist(userDir)
         DirCreate(userDir)
     Run(userDir)
+}
+
+_HandleOpenExternalUrl(parsed) {
+    url := Trim(parsed.Get("url", ""))
+    ; Conversation content can control this value. Restrict host execution to
+    ; ordinary web URLs and reject whitespace/control characters or OS/custom
+    ; URI schemes before handing the target to Windows' registered handler.
+    if !url || !RegExMatch(url, "i)^https?://[^\s]+$")
+        throw Error("Blocked unsupported external URL")
+    Run(url)
 }
 
 _HandleBrowseIcon(parsed) {

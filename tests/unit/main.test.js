@@ -8,6 +8,8 @@ const vm = require('node:vm');
 function loadMainModule({ chatMessages = null } = {}) {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'main.js'), 'utf-8');
     let receivedCalls = {};
+    let documentListeners = {};
+    let ipcPosts = [];
     const sandbox = {
         document: {
             getElementById: (id) => id === 'chat-messages' ? chatMessages : null,
@@ -27,6 +29,10 @@ function loadMainModule({ chatMessages = null } = {}) {
             _hideSettings: function() { receivedCalls._hideSettings = true; },
             SettingsPanel: { onSettingsReceived: function(data) { receivedCalls.onSettingsReceived = data; } },
             SettingsProviders: { handleCodexStatus: function(data) { receivedCalls.codexStatus = data; } },
+        },
+        Ipc: {
+            postToHost: function(action, data) { ipcPosts.push({ action, data }); },
+            handleAck: function() {}
         },
         console: console,
         md: { render: (c) => '<p>' + c + '</p>' },
@@ -68,6 +74,9 @@ function loadMainModule({ chatMessages = null } = {}) {
     };
     sandbox.global = sandbox;
     sandbox._receivedCalls = receivedCalls;
+    sandbox.document.addEventListener = (type, handler) => { documentListeners[type] = handler; };
+    sandbox._documentListeners = documentListeners;
+    sandbox._ipcPosts = ipcPosts;
     vm.runInContext(src, vm.createContext(sandbox));
     return sandbox;
 }
@@ -82,6 +91,38 @@ describe('handleWebMessage routing', () => {
     it('keeps single-newline paragraph breaks visible (markdown-it breaks:true, bugs #222/#224)', () => {
         const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'main.js'), 'utf-8');
         assert.ok(src.includes('breaks: true'), 'markdown-it must render soft breaks (single newlines) as <br> so paragraph breaks stay visible');
+    });
+
+    it('hands HTTP(S) link clicks to the host instead of navigating the WebView', () => {
+        const ctx = loadMainModule();
+        let prevented = false;
+        const link = { href: 'https://example.com/news?id=42' };
+        const target = { closest: (selector) => selector === 'a[href]' ? link : null };
+
+        ctx._documentListeners.click({
+            target,
+            preventDefault: () => { prevented = true; }
+        });
+
+        assert.strictEqual(prevented, true, 'external web link navigation must be cancelled in the WebView');
+        assert.strictEqual(ctx._ipcPosts.length, 1);
+        assert.strictEqual(ctx._ipcPosts[0].action, 'openExternalUrl');
+        assert.strictEqual(ctx._ipcPosts[0].data.url, 'https://example.com/news?id=42');
+    });
+
+    it('does not hand non-HTTP(S) schemes to the host', () => {
+        const ctx = loadMainModule();
+        const blocked = ['javascript:alert(1)', 'file:///C:/Windows/System32/calc.exe', 'mailto:test@example.com'];
+
+        for (const href of blocked) {
+            let prevented = false;
+            const link = { href };
+            const target = { closest: (selector) => selector === 'a[href]' ? link : null };
+            ctx._documentListeners.click({ target, preventDefault: () => { prevented = true; } });
+            assert.strictEqual(prevented, false, href + ' should not be intercepted for host execution');
+        }
+
+        assert.strictEqual(ctx._ipcPosts.length, 0, 'blocked schemes must never cross the WebView/host boundary');
     });
 
     it('routes Codex status responses to provider settings', () => {

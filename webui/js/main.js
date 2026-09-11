@@ -39,6 +39,25 @@ var md = window.markdownit({
     katexOptions: { macros: { "\\RR": "\\mathbb{R}" } }
   });
 
+// Keep external web navigation out of the application WebView. Model and user
+// markdown is untrusted content, so only HTTP(S) links are handed to the host;
+// the AHK side validates the scheme again before invoking the OS handler.
+function _handleExternalLinkClick(event) {
+  var target = event && event.target;
+  var link = target && typeof target.closest === 'function'
+    ? target.closest('a[href]')
+    : null;
+  if (!link) return;
+
+  var url = String(link.href || '');
+  if (!/^https?:\/\/[^\s]+$/i.test(url)) return;
+
+  event.preventDefault();
+  Ipc.postToHost('openExternalUrl', { url: url });
+}
+
+document.addEventListener('click', _handleExternalLinkClick);
+
 // Main message handler from AHK
 function handleWebMessage(event) {
   try {

@@ -76,6 +76,7 @@
     'switchBranch': { dir: 'web->ahk', fields: ['id', 'direction'], required: ['id', 'direction'] },
     'sidebarAction': { dir: 'web->ahk', fields: ['subAction', 'threadId', 'folderId', 'name', 'title', 'messageId'], required: ['subAction'] },
     'searchMessages': { dir: 'web->ahk', fields: ['query', 'queryId', 'threadId'], required: ['query', 'queryId'] },
+    'openExternalUrl': { dir: 'web->ahk', fields: ['url'], required: ['url'] },
     'hideWindow': { dir: 'web->ahk', data: 'any' },
     'switchAssistant': { dir: 'web->ahk', fields: ['assistantId'], required: ['assistantId'] },
     'updateModelSettings': { dir: 'web->ahk', fields: ['model', 'systemMessage', 'systemOverrideSet', 'reasoning', 'temperature', 'reasoningOverrideSet', 'temperatureOverrideSet', 'webSearch', 'imageGeneration'], required: ['model', 'systemMessage', 'reasoning', 'temperature', 'webSearch', 'imageGeneration'] },
