@@ -523,6 +523,30 @@ class ChatDispatchTest {
             throw Error("Cancelled/invalid icon browse must not post")
     }
 
+    Dispatch_BrowseCompletionSound_PostsSelectedWav() {
+        global _mockFileSelectResult, _mockFileSelectOptions
+        _mockFileSelectResult := "C:\sounds\done.wav"
+        _mockFileSelectOptions := ""
+        web := this._captureWebView()
+        try {
+            _HandleBrowseCompletionSound(Map("path", ""))
+        } finally {
+            web.restore()
+        }
+        if _mockFileSelectOptions != 3
+            throw Error("completion sound Browse must select an existing file")
+        found := false
+        for _, json in web.captured {
+            if InStr(json, '"target":"completionSoundSelected"') {
+                parsed := jsongo.Parse(json)
+                if parsed["data"]["path"] = "C:\sounds\done.wav"
+                    found := true
+            }
+        }
+        if !found
+            throw Error("completion sound Browse should post the selected WAV path")
+    }
+
     Dispatch_BrowseBackupFolder_UsesDirectoryPicker() {
         global _mockFileSelectResult, _mockFileSelectOptions, _mockFileSelectRoot
         filePath := A_Temp "\\backup-browse-file-" A_TickCount ".txt"

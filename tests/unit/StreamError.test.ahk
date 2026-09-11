@@ -439,6 +439,14 @@ class StreamErrorTest {
             throw Error("_handleStreamComplete must post a threadList refresh after postThreadStats (bug #232)")
     }
 
+    StreamComplete_PlaysBestEffortCompletionCue() {
+        src := FileRead(A_ScriptDir "\..\chat\streaming\StreamCompletion.ahk")
+        if !RegExMatch(src, "_postThreadListRefresh\(\)[\s\S]{0,700}?_NotifyGenerationComplete\(streamThreadId\)")
+            throw Error("successful stream completion should trigger the configured completion cue after the sidebar refresh")
+        if !InStr(src, 'DllCall("winmm\PlaySoundW"')
+            throw Error("system completion sound should use the native Windows PlaySound alias")
+    }
+
     PartialPersist_RefreshesSidebar() {
         src := FileRead(A_ScriptDir "\..\chat\streaming\StreamError.ahk")
         if !RegExMatch(src, "postThreadStats\(streamThreadId\)[\s\S]{0,400}?_postThreadListRefresh\(\)")

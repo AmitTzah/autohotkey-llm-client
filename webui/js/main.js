@@ -242,6 +242,12 @@ function handleWebMessage(event) {
         }
         break;
 
+      case 'completionSoundSelected':
+        if (window.SettingsGeneral && typeof window.SettingsGeneral.onCompletionSoundSelected === 'function') {
+          window.SettingsGeneral.onCompletionSoundSelected(data.path);
+        }
+        break;
+
       case 'backupFolderSelected':
         if (window.SettingsGeneral && typeof window.SettingsGeneral.onFolderSelected === 'function') {
           window.SettingsGeneral.onFolderSelected(data.folder);

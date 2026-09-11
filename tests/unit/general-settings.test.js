@@ -225,6 +225,7 @@ describe('General settings section', () => {
         const data = ctx.module.save();
         assert.strictEqual(JSON.stringify(data), JSON.stringify({
             threadTitles: { enabled: true, model: 'gpt-5', prompt: 'Sum', maxTokens: 99 },
+            generationNotifications: { mode: 'attention', sound: 'system', customPath: '' },
             apiLogs: { maxEntries: 12 },
             trash: { retentionDays: 3 },
 
@@ -232,6 +233,62 @@ describe('General settings section', () => {
             newChatStartsWith: 'asst:asst-1',
             backup: { enabled: true, folder: 'C:\\Backups' },
         }));
+    });
+
+    it('loads and saves generation notification settings', () => {
+        const mode = makeEl({ value: '' });
+        const type = makeEl({ value: '' });
+        const soundPath = makeEl({ value: '', disabled: false });
+        const browse = makeEl({ disabled: false });
+        const ctx = loadSection({ els: {
+            completionSoundMode: mode,
+            completionSoundType: type,
+            completionSoundPath: soundPath,
+            completionSoundBrowseBtn: browse,
+        } });
+
+        ctx.module.load({ generationNotifications: {
+            mode: 'always', sound: 'custom', customPath: 'C:\\sounds\\done.wav',
+        } });
+        assert.strictEqual(mode.value, 'always');
+        assert.strictEqual(type.value, 'custom');
+        assert.strictEqual(soundPath.value, 'C:\\sounds\\done.wav');
+        assert.strictEqual(soundPath.disabled, false);
+        assert.strictEqual(browse.disabled, false);
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(ctx.module.save().generationNotifications)), {
+            mode: 'always', sound: 'custom', customPath: 'C:\\sounds\\done.wav',
+        });
+    });
+
+    it('requires a custom WAV path only when custom completion sound is active', () => {
+        const mode = makeEl({ value: 'attention' });
+        const type = makeEl({ value: 'custom' });
+        const soundPath = makeEl({ value: '   ' });
+        const ctx = loadSection({ els: {
+            completionSoundMode: mode,
+            completionSoundType: type,
+            completionSoundPath: soundPath,
+        } });
+        assert.strictEqual(ctx.module.validate().valid, false);
+
+        mode.value = 'never';
+        assert.strictEqual(ctx.module.validate().valid, true, 'disabled completion sounds may keep an empty custom path');
+    });
+
+    it('completion sound Browse posts the current path to native IPC', () => {
+        const browse = makeEl();
+        const type = makeEl({ value: 'custom' });
+        const soundPath = makeEl({ value: ' C:\\sounds\\done.wav ' });
+        const ctx = loadSection({ els: {
+            completionSoundType: type,
+            completionSoundPath: soundPath,
+            completionSoundBrowseBtn: browse,
+        } });
+        ctx.fireDomReady();
+        browse.fire('click');
+        const call = ctx.ipcCalls.find((c) => c.action === 'browseCompletionSound');
+        assert.ok(call);
+        assert.strictEqual(call.payload.path, 'C:\\sounds\\done.wav');
     });
 
     it('loads and saves backup settings, including the disabled defaults', () => {
@@ -263,6 +320,7 @@ describe('General settings section', () => {
         assert.ok(data.threadTitles.model === 'deepseek/deepseek-v4-flash');
         assert.ok(data.threadTitles.prompt === '');
         assert.ok(data.threadTitles.maxTokens === 50);
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(data.generationNotifications)), { mode: 'attention', sound: 'system', customPath: '' });
         assert.ok(data.apiLogs.maxEntries === 20);
         assert.ok(data.trash.retentionDays === 30);
 

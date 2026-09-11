@@ -88,6 +88,10 @@ OnWebMessageReceived(sender, args) {
                 CustomMessages.notifyReloadMain(requestParams["mainScriptHiddenHwnd"])
             case "browseIcon":
                 _HandleBrowseIcon(parsed)
+            case "browseCompletionSound":
+                _HandleBrowseCompletionSound(parsed)
+            case "testCompletionSound":
+                _HandleTestCompletionSound(parsed)
             case "browseBackupFolder":
                 _HandleBrowseBackupFolder(parsed)
             case "backupNow":
@@ -454,6 +458,24 @@ _HandleBrowseIcon(parsed) {
     if InStr(selected, repoRoot) = 1
         selected := SubStr(selected, StrLen(repoRoot) + 2)
     postWebMessage("iconFileSelected", { field: field, path: selected })
+}
+
+_HandleBrowseCompletionSound(parsed) {
+    current := parsed.Get("path", "")
+    startPath := current && FileExist(current) ? current : ""
+    selected := FileSelect(3, startPath, "Select completion sound", "WAV Audio (*.wav)")
+    if selected
+        postWebMessage("completionSoundSelected", { path: selected })
+}
+
+_HandleTestCompletionSound(parsed) {
+    soundType := parsed.Get("soundType", "system")
+    customPath := parsed.Get("customPath", "")
+    if !_PlayCompletionSound(soundType, customPath, false) {
+        if soundType = "custom"
+            throw Error("Choose a valid WAV file before testing the custom completion sound.")
+        throw Error("Windows could not play the notification sound.")
+    }
 }
 
 _HandleBrowseBackupFolder(parsed) {

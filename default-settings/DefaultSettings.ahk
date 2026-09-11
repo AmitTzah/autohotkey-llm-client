@@ -543,6 +543,16 @@ titleGenModel := "deepseek/deepseek-v4-flash"
 titleGenSystemPrompt := "Generate a short, descriptive title (max 6 words) for a conversation based on the first exchange. Respond with ONLY the title, no quotes, no punctuation, no commentary."
 titleGenMaxTokens := 50
 
+; ============================================================================
+; S6B GENERATION NOTIFICATIONS
+; ============================================================================
+; Native completion cue for chat generations. "attention" plays only when the
+; completed request belongs to another chat or the chat window is not active.
+;
+completionSoundMode := "attention" ; never | attention | always
+completionSoundType := "system"    ; system | custom
+completionSoundPath := ""          ; custom WAV file path
+
 
 ; ============================================================================
 ; S7 UI SETTINGS

@@ -19,7 +19,7 @@ class SettingsHandler {
     ; Registry of every top-level settings key. A key must be
     ; added here AND produced by SettingsDefaults, so the round-trip tests can
     ; guarantee no settings section silently drops values on save.
-    static KNOWN_TOP_LEVEL_KEYS := ["version", "providers", "models", "assistants", "commands", "submenuOrder", "commandGroupOrders", "threadTitles", "ui", "icons", "hotkeys", "apiLogs", "trash", "backup", "menuItems", "chatShortcut", "newChatStartsWith", "tavilyApiKey", "tavilyEndpoint"]
+    static KNOWN_TOP_LEVEL_KEYS := ["version", "providers", "models", "assistants", "commands", "submenuOrder", "commandGroupOrders", "threadTitles", "generationNotifications", "ui", "icons", "hotkeys", "apiLogs", "trash", "backup", "menuItems", "chatShortcut", "newChatStartsWith", "tavilyApiKey", "tavilyEndpoint"]
 
     static Load() => SettingsPersistence.Load()
     static Save(settingsMap) => SettingsPersistence.Save(settingsMap)

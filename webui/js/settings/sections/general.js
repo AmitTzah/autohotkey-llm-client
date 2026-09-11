@@ -12,6 +12,20 @@
     return input && input.value ? String(input.value).trim() : '';
   }
 
+  function completionSoundPathValue() {
+    var input = document.getElementById('completionSoundPath');
+    return input && input.value ? String(input.value).trim() : '';
+  }
+
+  function syncCompletionSoundControls() {
+    var type = document.getElementById('completionSoundType');
+    var path = document.getElementById('completionSoundPath');
+    var browse = document.getElementById('completionSoundBrowseBtn');
+    var custom = !!type && type.value === 'custom';
+    if (path) path.disabled = !custom;
+    if (browse) browse.disabled = !custom;
+  }
+
   // Populate the "New Chats Start With" dropdown: App Default first, then the
   // configured assistants ("asst:<id>"), then every available model. A saved
   // value that no longer exists (e.g. a removed model) is appended so the user
@@ -88,6 +102,17 @@
       if (maxTok) maxTok.value = tt.maxTokens || 50;
     }
     // API Logs
+    // Generation Notifications
+    if (data && data.generationNotifications) {
+      var gn = data.generationNotifications;
+      var modeSel = document.getElementById('completionSoundMode');
+      var soundSel = document.getElementById('completionSoundType');
+      var soundPath = document.getElementById('completionSoundPath');
+      if (modeSel) modeSel.value = gn.mode || 'attention';
+      if (soundSel) soundSel.value = gn.sound || 'system';
+      if (soundPath) soundPath.value = gn.customPath || '';
+      syncCompletionSoundControls();
+    }
     if (data && data.apiLogs) {
       var logEntries = document.getElementById('apiLogMaxEntries');
       if (logEntries && data.apiLogs.maxEntries !== undefined) logEntries.value = data.apiLogs.maxEntries;
@@ -123,6 +148,11 @@
       maxTokens: S.num((document.getElementById('titleGenMaxTokens') || {}).value, 50)
     };
     // API Logs
+    data.generationNotifications = {
+      mode: (document.getElementById('completionSoundMode') || {}).value || 'attention',
+      sound: (document.getElementById('completionSoundType') || {}).value || 'system',
+      customPath: completionSoundPathValue()
+    };
     data.apiLogs = {
       maxEntries: S.num((document.getElementById('apiLogMaxEntries') || {}).value, 20)
     };
@@ -143,11 +173,25 @@
   }
 
   function validate() {
+    var soundMode = (document.getElementById('completionSoundMode') || {}).value || 'attention';
+    var soundType = (document.getElementById('completionSoundType') || {}).value || 'system';
+    if (soundMode !== 'never' && soundType === 'custom' && !completionSoundPathValue()) {
+      return { valid: false, message: 'Choose a custom WAV file or switch the completion sound back to Windows notification sound.' };
+    }
     var toggle = document.getElementById('backupEnabledToggle');
     if (toggle && toggle.classList.contains('on') && !backupFolderValue()) {
       return { valid: false, message: 'Choose a backup destination folder before enabling automatic backups.' };
     }
     return { valid: true };
+  }
+
+  function onCompletionSoundSelected(path) {
+    var input = document.getElementById('completionSoundPath');
+    var type = document.getElementById('completionSoundType');
+    if (input) input.value = path ? String(path).trim() : '';
+    if (type) type.value = 'custom';
+    syncCompletionSoundControls();
+    S.markDirty();
   }
 
   function onFolderSelected(folder) {
@@ -176,6 +220,28 @@
       }
       S.markDirty();
     });
+  }
+
+  function wireCompletionSoundControls() {
+    var type = document.getElementById('completionSoundType');
+    if (type) type.addEventListener('change', syncCompletionSoundControls);
+    var browse = document.getElementById('completionSoundBrowseBtn');
+    if (browse) browse.addEventListener('click', function() {
+      Ipc.postToHost('browseCompletionSound', { path: completionSoundPathValue() });
+    });
+    var test = document.getElementById('completionSoundTestBtn');
+    if (test) test.addEventListener('click', function() {
+      var soundType = (document.getElementById('completionSoundType') || {}).value || 'system';
+      var customPath = completionSoundPathValue();
+      if (soundType === 'custom' && !customPath) {
+        window._showConfirm('Sound Test Failed', 'Choose a custom WAV file first.', 'OK');
+        return;
+      }
+      Ipc.request('testCompletionSound', { soundType: soundType, customPath: customPath }).catch(function(err) {
+        window._showConfirm('Sound Test Failed', (err && err.message) || 'The completion sound could not be played.', 'OK');
+      });
+    });
+    syncCompletionSoundControls();
   }
 
   function wireBackupControls() {
@@ -211,11 +277,12 @@
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('DOMContentLoaded', function() {
       wireToggle();
+      wireCompletionSoundControls();
       wireBackupControls();
       S.wireDirty('sec-general', S.markDirty);
     });
   }
 
-  window.SettingsGeneral = { onFolderSelected: onFolderSelected, onBackupStatus: onBackupStatus };
+  window.SettingsGeneral = { onFolderSelected: onFolderSelected, onBackupStatus: onBackupStatus, onCompletionSoundSelected: onCompletionSoundSelected };
   S.registerSection(sectionName, { load: load, save: save, validate: validate });
 })();

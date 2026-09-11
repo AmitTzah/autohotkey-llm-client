@@ -72,6 +72,13 @@
   background: var(--accent-primary); border-radius: 0 4px 4px 0;
 }
 
+.chat-item.completed-unread::after {
+  content: ''; position: absolute; right: 12px; top: 18px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent-primary); box-shadow: 0 0 0 2px var(--bg-main);
+}
+.chat-item.completed-unread .chat-name { padding-right: 16px; }
+.chat-item.active.completed-unread::after { display: none; }
+
 .chat-icon { color: var(--text-tertiary); display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; }
 .chat-item.active .chat-icon, .chat-item.active .chat-name { color: var(--accent-primary); }
 

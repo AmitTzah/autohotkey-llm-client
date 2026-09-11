@@ -200,7 +200,7 @@
   <!-- Settings Center -->
   <div class="settings-center" id="settingsCenter" style="display:none;">
     <div class="settings-content">
-      <div class="section-card" id="sec-general" ><div class="section-card-header"><i class="settings-icon-sm" data-lucide="settings"></i> General — Thread Titles, API Logs, Trash, Web Search</div><div class="section-card-body"><div class="field"><label class="field-label">New Chats Start With</label><select id="newChatStartsWith"><option value="">App Default (deepseek/deepseek-v4-flash)</option><optgroup label="Assistants"></optgroup><optgroup label="Models"></optgroup></select></div>
+      <div class="section-card" id="sec-general" ><div class="section-card-header"><i class="settings-icon-sm" data-lucide="settings"></i> General — Thread Titles, Notifications, API Logs, Trash, Web Search</div><div class="section-card-body"><div class="field"><label class="field-label">New Chats Start With</label><select id="newChatStartsWith"><option value="">App Default (deepseek/deepseek-v4-flash)</option><optgroup label="Assistants"></optgroup><optgroup label="Models"></optgroup></select></div>
         <div class="settings-card-group">
           <div class="toggle-row settings-card-header-row">
             <div><div class="lbl">Thread Title Generation</div><div class="settings-hint-12-top">After the first exchange, generates a short title via a cheap LLM call</div></div>
@@ -210,6 +210,18 @@
             <div class="grid-2"><div class="field"><label class="field-label">Model</label><select id="titleGenModel"><option>deepseek/deepseek-v4-flash</option><option>deepseek/deepseek-v4-pro</option><option>openai/gpt-4o-mini</option></select></div>
             <div class="field"><label class="field-label">Max Tokens</label><input type="number" id="titleGenMaxTokens" value="50"></div></div>
             <div class="field"><label class="field-label">System Prompt</label><textarea id="titleGenPrompt">Generate a short, descriptive title (max 6 words) for a conversation based on the first exchange. Respond with ONLY the title, no quotes, no punctuation, no commentary.</textarea></div>
+          </div>
+        </div>
+        <div class="settings-card-group">
+          <div class="settings-card-header-row">
+            <div><div class="lbl">Generation Notifications</div><div class="settings-hint-12-top">A small native sound can alert you when a chat finishes generating</div></div>
+          </div>
+          <div class="settings-p-16">
+            <div class="grid-2">
+              <div class="field"><label class="field-label">Play completion sound</label><select id="completionSoundMode"><option value="never">Never</option><option value="attention" selected>When completion needs attention</option><option value="always">Always</option></select></div>
+              <div class="field"><label class="field-label">Sound</label><select id="completionSoundType"><option value="system" selected>Windows notification sound</option><option value="custom">Custom WAV file</option></select></div>
+            </div>
+            <div class="field"><label class="field-label">Custom WAV</label><div class="settings-flex-row"><input class="settings-flex-1" type="text" id="completionSoundPath" placeholder="Choose a .wav file..."><button class="btn-sm" id="completionSoundBrowseBtn">Browse</button><button class="btn-sm" id="completionSoundTestBtn">Test</button></div><div class="settings-field-hint">Needs attention means another chat finished, or the chat window was not active when the response completed.</div></div>
           </div>
         </div>
         <div class="settings-group-title">Web Search</div>

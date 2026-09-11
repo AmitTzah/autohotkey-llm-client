@@ -108,6 +108,27 @@ describe('loadThreadList', () => {
     });
 });
 
+describe('completion attention dots', () => {
+    it('survives sidebar rerenders until the chat is cleared', () => {
+        const ctx = loadModules();
+        ctx.markThreadCompleted('t-done');
+        const marked = ctx.createChatItem({ id: 't-done', title: 'Done', updated_at: '2026-01-01' });
+        assert.ok(marked.className.indexOf('completed-unread') >= 0, 'completed chat should render the attention class');
+
+        ctx.clearThreadCompleted('t-done');
+        const cleared = ctx.createChatItem({ id: 't-done', title: 'Done', updated_at: '2026-01-01' });
+        assert.ok(cleared.className.indexOf('completed-unread') < 0, 'opening/clearing the chat should remove the attention class');
+    });
+
+    it('does not mark the currently active chat', () => {
+        const ctx = loadModules();
+        ctx.activeThreadId = 't-active';
+        ctx.markThreadCompleted('t-active');
+        const item = ctx.createChatItem({ id: 't-active', title: 'Active', updated_at: '2026-01-01' });
+        assert.ok(item.className.indexOf('completed-unread') < 0);
+    });
+});
+
 describe('loadTrashList', () => {
     it('does nothing for empty trash', () => {
         const ctx = loadModules();

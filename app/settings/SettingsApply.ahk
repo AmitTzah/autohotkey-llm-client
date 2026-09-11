@@ -11,6 +11,7 @@ class SettingsApply {
         SettingsApply._ApplySubmenuOrder(settings)
         SettingsApply._ApplyCommandGroupOrders(settings)
         SettingsApply._ApplyThreadTitles(settings)
+        SettingsApply._ApplyGenerationNotifications(settings)
         SettingsApply._ApplyUI(settings)
         SettingsApply._ApplyIcons(settings)
         SettingsApply._ApplyHotkeys(settings)
@@ -224,6 +225,19 @@ class SettingsApply {
             titleGenSystemPrompt := tt["prompt"]
         if tt.Has("maxTokens")
             titleGenMaxTokens := tt["maxTokens"]
+    }
+
+    static _ApplyGenerationNotifications(settings) {
+        global completionSoundMode, completionSoundType, completionSoundPath
+
+        if !settings.Has("generationNotifications")
+            return
+        n := settings["generationNotifications"]
+        mode := n.Has("mode") ? n["mode"] : "attention"
+        sound := n.Has("sound") ? n["sound"] : "system"
+        completionSoundMode := (mode = "never" || mode = "always") ? mode : "attention"
+        completionSoundType := sound = "custom" ? "custom" : "system"
+        completionSoundPath := n.Has("customPath") ? n["customPath"] : ""
     }
 
     static _ApplyUI(settings) {

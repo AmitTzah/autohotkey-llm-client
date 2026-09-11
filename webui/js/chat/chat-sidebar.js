@@ -6,6 +6,30 @@
 var _threadMeta = {};
 // Array of { id, name } — available folders, populated by loadThreadList
 var _folders = [];
+// Session-only completion attention state. It intentionally survives thread-list
+// rerenders but is cleared when the user opens that chat.
+var _threadAttention = {};
+
+function _setThreadAttentionClass(threadId, enabled) {
+  var items = document.querySelectorAll('.chat-item');
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].getAttribute('data-chat') !== threadId) continue;
+    if (enabled) items[i].classList.add('completed-unread');
+    else items[i].classList.remove('completed-unread');
+  }
+}
+
+function markThreadCompleted(threadId) {
+  if (!threadId || threadId === activeThreadId) return;
+  _threadAttention[threadId] = true;
+  _setThreadAttentionClass(threadId, true);
+}
+
+function clearThreadCompleted(threadId) {
+  if (!threadId) return;
+  delete _threadAttention[threadId];
+  _setThreadAttentionClass(threadId, false);
+}
 
 function toggleSidebar() {
   Ipc.postToHost('sidebarAction', { subAction: 'loadThreadList' });
@@ -126,7 +150,12 @@ function loadThreadList(threads, folders) {
 function createChatItem(t) {
   var item = document.createElement('div');
   item.className = 'chat-item';
-  if (t.id === activeThreadId) item.classList.add('active');
+  if (t.id === activeThreadId) {
+    delete _threadAttention[t.id];
+    item.classList.add('active');
+  } else if (_threadAttention[t.id]) {
+    item.classList.add('completed-unread');
+  }
   item.setAttribute('data-chat', t.id);
 
   var dateStr = formatRelativeDate(t.updated_at || t.created_at);
@@ -298,6 +327,7 @@ function loadThread(threadId) {
     return;
   }
   if (typeof window._showChat === 'function') window._showChat();
+  clearThreadCompleted(threadId);
   activeThreadId = threadId;
   updateTopbarTitle();
   _setActiveHighlight(threadId);

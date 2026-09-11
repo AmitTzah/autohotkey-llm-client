@@ -104,7 +104,7 @@ class SettingsHandlerTest {
     GetDefaults_HasAllTopLevelKeys() {
         defaults := SettingsHandler.GetDefaults()
         expectedKeys := ["version", "providers", "models", "assistants", "commands",
-                          "submenuOrder", "commandGroupOrders", "threadTitles", "ui", "icons",
+                          "submenuOrder", "commandGroupOrders", "threadTitles", "generationNotifications", "ui", "icons",
                           "hotkeys", "apiLogs", "trash", "backup", "menuItems"]
         for _, k in expectedKeys {
             if !defaults.Has(k)
@@ -178,6 +178,32 @@ class SettingsHandlerTest {
             titleGenModel := oldModel
             titleGenSystemPrompt := oldPrompt
             titleGenMaxTokens := oldMax
+        }
+    }
+
+    ApplyGenerationNotifications_NormalizesValues() {
+        global completionSoundMode, completionSoundType, completionSoundPath
+        oldMode := completionSoundMode
+        oldType := completionSoundType
+        oldPath := completionSoundPath
+        try {
+            SettingsApply._ApplyGenerationNotifications(Map(
+                "generationNotifications", Map("mode", "bogus", "sound", "bogus", "customPath", "C:\sounds\done.wav")
+            ))
+            if completionSoundMode != "attention" || completionSoundType != "system"
+                throw Error("invalid notification values should normalize to attention/system")
+            if completionSoundPath != "C:\sounds\done.wav"
+                throw Error("custom completion path should be preserved")
+
+            SettingsApply._ApplyGenerationNotifications(Map(
+                "generationNotifications", Map("mode", "always", "sound", "custom", "customPath", "D:\done.wav")
+            ))
+            if completionSoundMode != "always" || completionSoundType != "custom" || completionSoundPath != "D:\done.wav"
+                throw Error("valid notification values should apply exactly")
+        } finally {
+            completionSoundMode := oldMode
+            completionSoundType := oldType
+            completionSoundPath := oldPath
         }
     }
 

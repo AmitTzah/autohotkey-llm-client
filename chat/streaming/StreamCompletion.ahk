@@ -47,6 +47,10 @@ _handleStreamComplete() {
         ; Persisted assistant messages change sidebar order/model metadata.
         ; Refresh immediately after persistence.
         _postThreadListRefresh()
+        ; Sound is best-effort and must never turn a successful response into an error.
+        try _NotifyGenerationComplete(streamThreadId)
+        catch Error as notifyErr
+            debugLog("[NOTIFY] Completion sound failed: " notifyErr.Message)
         ; The finishing stream is still registered here, so exclude it while
         ; checking all other streams, search loops, and non-stream requests.
         currentStream := _FindStreamByKey(_currentStreamKey)
@@ -66,6 +70,59 @@ _handleStreamComplete() {
             startLoadingCursor(false)
         }
         deleteTempFiles()
+    }
+}
+
+; Play the configured native completion cue. This is intentionally host-side:
+; streaming and single-shot chat requests share this successful completion path.
+_NotifyGenerationComplete(threadId := "") {
+    global completionSoundMode, completionSoundType, completionSoundPath
+    global activeThreadId, chatWindow
+
+    mode := IsSet(completionSoundMode) ? completionSoundMode : "attention"
+    if mode = "never"
+        return false
+
+    if mode != "always" {
+        needsAttention := threadId && threadId != activeThreadId
+        if !needsAttention {
+            try needsAttention := !WinActive("ahk_id " chatWindow.hWnd)
+            catch
+                needsAttention := true
+        }
+        if !needsAttention
+            return false
+    }
+
+    soundType := IsSet(completionSoundType) ? completionSoundType : "system"
+    customPath := IsSet(completionSoundPath) ? completionSoundPath : ""
+    return _PlayCompletionSound(soundType, customPath, true)
+}
+
+_PlayCompletionSound(soundType := "system", customPath := "", fallbackToSystem := true) {
+    if soundType = "custom" {
+        if customPath && FileExist(customPath) {
+            try {
+                SoundPlay(customPath)
+                return true
+            } catch Error as e {
+                debugLog("[NOTIFY] Custom completion sound failed: " e.Message)
+            }
+        } else if customPath {
+            debugLog("[NOTIFY] Custom completion sound not found: " customPath)
+        }
+        if !fallbackToSystem
+            return false
+    }
+
+    try {
+        ; SND_ALIAS | SND_ASYNC. If the notification alias is unavailable,
+        ; PlaySound falls back to the user's configured Windows default sound.
+        played := DllCall("winmm\PlaySoundW", "Str", "SystemNotification", "Ptr", 0, "UInt", 0x00010001, "Int")
+        return played != 0
+    } catch Error as e {
+        debugLog("[NOTIFY] Windows completion sound failed: " e.Message)
+        return false
     }
 }
 

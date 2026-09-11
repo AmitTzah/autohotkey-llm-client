@@ -27,6 +27,8 @@ function loadStreamModule() {
         onStreamDone: undefined, cancelStreaming: undefined,
         createStreamingBubble: undefined, createThinkingBlock: undefined,
         handleStreamMessage: undefined, addStreamingActions: undefined,
+        markedCompletedThreads: [],
+        markThreadCompleted: (threadId) => sandbox.markedCompletedThreads.push(threadId),
         hideLoadingIndicator: () => {},
         // Mirrors production: enabling the composer clears any visible
         // loading dots (bug #215) and fully resets the stream state (bug
@@ -383,6 +385,7 @@ describe('onStreamDone thread scoping (bug #195)', () => {
         ctx.onStreamDone({ model: 'm', threadId: 't-A', dbMsg: { id: 'a-msg', parentId: 'a-user' } });
         assert.strictEqual(ctx.chatMessages.length, 1, 'wrong-thread response must not be pushed into chatMessages');
         assert.strictEqual(ctx.streamState.active, true, 'non-current completion must leave the current stream state untouched');
+        assert.deepStrictEqual(ctx.markedCompletedThreads, ['t-A'], 'successful completion in another chat should mark that chat for attention');
         assert.strictEqual(hidden, 0, 'the non-current streamDone itself must not clear the loading dots');
         // AHK posts setChatButtonsEnabled(true) once NO request remains - that
         // is the signal that clears the dots and resets the composer.

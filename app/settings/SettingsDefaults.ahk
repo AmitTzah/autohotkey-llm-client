@@ -41,6 +41,7 @@ class SettingsDefaults {
         d["submenuOrder"] := SettingsDefaults._DefaultsSubmenuOrder()
         d["commandGroupOrders"] := Map()
         d["threadTitles"] := SettingsDefaults._DefaultsThreadTitles()
+        d["generationNotifications"] := SettingsDefaults._DefaultsGenerationNotifications()
         d["ui"] := SettingsDefaults._DefaultsUI()
         d["icons"] := SettingsDefaults._DefaultsIcons()
         d["hotkeys"] := SettingsDefaults._DefaultsHotkeys()
@@ -212,6 +213,16 @@ class SettingsDefaults {
             "model", IsSet(titleGenModel) ? titleGenModel : "deepseek/deepseek-v4-flash",
             "prompt", IsSet(titleGenSystemPrompt) ? titleGenSystemPrompt : "",
             "maxTokens", IsSet(titleGenMaxTokens) ? titleGenMaxTokens : 50
+        )
+    }
+
+    static _DefaultsGenerationNotifications() {
+        global completionSoundMode, completionSoundType, completionSoundPath
+
+        return Map(
+            "mode", IsSet(completionSoundMode) ? completionSoundMode : "attention",
+            "sound", IsSet(completionSoundType) ? completionSoundType : "system",
+            "customPath", IsSet(completionSoundPath) ? completionSoundPath : ""
         )
     }
 

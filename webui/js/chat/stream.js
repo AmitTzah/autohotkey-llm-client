@@ -199,6 +199,13 @@ function onStreamDone(data) {
   var isCurrent = (!dbMsg || _streamBelongsToCurrentPath(dbMsg)) &&
     (!data.threadId || !activeThreadId || data.threadId === activeThreadId);
 
+  // Successful completions for another chat become a session-level attention
+  // dot. The AHK host refreshes the sidebar immediately after streamDone, and
+  // chat-sidebar.js keeps this state across that rerender.
+  if (data && data.threadId && data.threadId !== activeThreadId && typeof markThreadCompleted === 'function') {
+    markThreadCompleted(data.threadId);
+  }
+
   var provider = (data && data.provider) ? data.provider : (dbMsg && dbMsg.provider ? dbMsg.provider : streamState.provider);
   streamState.userScrolledUp = false;
   var container = document.getElementById('chat-messages');
