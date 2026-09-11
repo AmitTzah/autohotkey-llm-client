@@ -488,7 +488,26 @@ scenarios.push({
     await sendChatMessage(cdp, 'second question');
     await cdp.waitFor('typeof streamState !== "undefined" && streamState.active === true', 20000, 50, 'streaming active');
     await sleep(40);
-    await cdp.click('#chat-send-btn');
+    await cdp.clearPosted();
+    const stopHit = await cdp.pointerClick('#chat-send-btn', {
+      holdMs: 80,
+      // Streaming Thought updates call global lucide.createIcons(), which can
+      // replace the Stop SVG between mouse-down and mouse-up. Simulate that
+      // deterministically while the pointer is held.
+      duringPressExpression: `(() => {
+        const btn = document.querySelector('#chat-send-btn');
+        if (!btn) return false;
+        btn.innerHTML = btn.innerHTML;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+        return true;
+      })()`
+    });
+    if (stopHit.hitTag !== 'BUTTON')
+      throw new Error('Stop icon must not own pointer hit-testing: ' + JSON.stringify(stopHit));
+    await sleep(150);
+    const stopPosts = await cdp.postedMessages();
+    if (!stopPosts.some((m) => String(m).indexOf('cancelStream') >= 0))
+      throw new Error('physical Stop click did not post cancelStream: hit=' + JSON.stringify(stopHit) + ' posted=' + JSON.stringify(stopPosts));
     await waitStreamingIdle(cdp, 30000);
     await sleep(1200);
 

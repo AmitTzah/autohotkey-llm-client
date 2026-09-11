@@ -103,4 +103,5 @@
   display: flex; align-items: center; justify-content: center;
 }
 .send-btn svg { width: 22px; height: 22px; }
+.send-btn svg, .send-btn svg * { pointer-events: none; }
 .send-btn:hover { background: var(--accent-light); }

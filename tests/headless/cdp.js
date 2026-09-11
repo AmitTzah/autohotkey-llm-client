@@ -131,6 +131,47 @@ class CDP {
     })()`);
   }
 
+  // Click through Chrome's input pipeline so hit-testing, :active state and
+  // pointer/mouse event ordering match a real mouse click. Use this for
+  // regressions where renderer-side el.click() would bypass the failure mode.
+  async pointerClick(selector, { holdMs = 0, duringPressExpression = '' } = {}) {
+    const target = await this.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x, y,
+        disabled: !!el.disabled,
+        hitInside: !!hit && (hit === el || el.contains(hit)),
+        hitTag: hit ? hit.tagName : '',
+        hitId: hit ? (hit.id || '') : '',
+        hitClass: hit ? (hit.className && typeof hit.className === 'string' ? hit.className : '') : ''
+      };
+    })()`);
+    if (!target) throw new Error('pointerClick: element not found: ' + selector);
+    if (target.disabled) throw new Error('pointerClick: target is disabled: ' + selector);
+    if (!target.hitInside) {
+      throw new Error('pointerClick: center is intercepted for ' + selector +
+        ' by ' + JSON.stringify({ tag: target.hitTag, id: target.hitId, className: target.hitClass }));
+    }
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: target.x, y: target.y, button: 'none'
+    });
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: target.x, y: target.y, button: 'left', buttons: 1, clickCount: 1
+    });
+    if (duringPressExpression) await this.eval(duringPressExpression);
+    if (holdMs > 0) await new Promise((resolve) => setTimeout(resolve, holdMs));
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: target.x, y: target.y, button: 'left', buttons: 0, clickCount: 1
+    });
+    return target;
+  }
+
   // Set an input/textarea value the way a user would (native setter + input event).
   async type(selector, text) {
     const ok = await this.eval(`(() => {
