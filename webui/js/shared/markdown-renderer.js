@@ -104,6 +104,18 @@
       katexOptions: { macros: { "\\RR": "\\mathbb{R}" } }
     });
 
+    var defaultFence = md.renderer.rules.fence;
+    md.renderer.rules.fence = function(fences, idx, options, env, self) {
+      var fence = fences[idx];
+      var info = String(fence.info || '').trim().split(/\s+/)[0].toLowerCase();
+      if (info === 'mermaid') {
+        return '<div class="mermaid-diagram" data-mermaid-state="pending">' +
+          '<pre class="mermaid-source">' + escapeHtml(fence.content || '') + '</pre>' +
+          '</div>\n';
+      }
+      return defaultFence(fences, idx, options, env, self);
+    };
+
     var render = md.render.bind(md);
     md.render = function(content, env) {
       return render(normalizeBracketDisplayMath(content), env);

@@ -17,6 +17,7 @@ function loadMain({ storedContent = null, isChatMode = false, failWebViewReady =
       WebMessageRouter: { handle: messageHandler },
       ExternalNavigation: { init: () => calls.push('ExternalNavigation.init') },
       AppShell: { init: () => calls.push('AppShell.init') },
+      MermaidRenderer: { init: () => calls.push('MermaidRenderer.init') },
       ChatInput: { init: () => calls.push('ChatInput.init') },
       ChatFormat: { init: () => calls.push('ChatFormat.init') },
       ChatSidebar: { init: () => calls.push('ChatSidebar.init') },
@@ -63,6 +64,7 @@ describe('main bootstrap', () => {
     for (const name of [
       'ExternalNavigation.init',
       'AppShell.init',
+      'MermaidRenderer.init',
       'ChatInput.init',
       'ChatFormat.init',
       'ChatSidebar.init',

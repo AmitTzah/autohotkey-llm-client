@@ -34,6 +34,18 @@ describe('MarkdownRenderer', () => {
     assert.ok(code.includes('code-block-wrapper'), 'code blocks must keep AhkLLM actions/header markup');
   });
 
+  it('emits safe Mermaid placeholders for mermaid fences only', () => {
+    const md = createRenderer();
+    const diagram = md.render('\x60\x60\x60mermaid\ngraph TD\n  A[<unsafe>] --> B\n\x60\x60\x60');
+    assert.ok(diagram.includes('class="mermaid-diagram"'), 'mermaid fences should become diagram placeholders: ' + diagram);
+    assert.ok(diagram.includes('data-mermaid-state="pending"'));
+    assert.ok(diagram.includes('&lt;unsafe&gt;'), 'diagram source must remain escaped until Mermaid renders it: ' + diagram);
+    assert.ok(!diagram.includes('code-block-wrapper'), 'mermaid fences should not use the normal highlighted-code wrapper');
+
+    const ordinary = md.render('\x60\x60\x60javascript\nconst x = 1;\n\x60\x60\x60');
+    assert.ok(ordinary.includes('code-block-wrapper'), 'ordinary fenced code must keep existing rendering');
+  });
+
   it('renders dollar and bracket LaTeX through KaTeX', () => {
     const md = createRenderer();
     const cases = [

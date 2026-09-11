@@ -178,3 +178,39 @@
 /* Provider badge shown before assistant model/assistant name. */
 .msg-provider-icon { display: inline-block; vertical-align: middle; }
 .msg.bot .msg-head { align-items: center; }
+
+
+/* Mermaid diagrams */
+.mermaid-diagram {
+  margin: 12px 0;
+  padding: 16px;
+  overflow-x: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-main);
+  border-radius: var(--radius-md);
+}
+
+.mermaid-diagram .mermaid-source {
+  margin: 0;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.mermaid-diagram.mermaid-rendered {
+  display: flex;
+  justify-content: center;
+}
+
+.mermaid-diagram.mermaid-rendered svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error-message {
+  margin-top: 10px;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
