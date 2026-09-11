@@ -9,11 +9,12 @@ const { installIpc } = require('./helpers/ipc-test-utils');
 function loadInputModule() {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'chat', 'chat-input.js'), 'utf-8');
     let postedMessages = [];
+    const sendBtn = { disabled: false, textContent: '', onclick: null, title: 'Send message', setAttribute(name, value) { this[name] = value; } };
     const sandbox = {
         document: {
             getElementById: (id) => {
                 if (id === 'chat-input') return { value: 'test message', style: {}, disabled: false, focus: () => {} };
-                if (id === 'chat-send-btn') return { disabled: false, textContent: '', onclick: null };
+                if (id === 'chat-send-btn') return sendBtn;
                 return null;
             },
             createElement: () => ({ style: {}, appendChild: () => {}, innerHTML: '', remove: () => {} }),
@@ -116,6 +117,19 @@ describe('onChatSend — payload construction', () => {
         ctx.setChatButtonsEnabled(false);
         assert.strictEqual(shown, 1,
             'command-triggered requests must show loading dots before the first stream chunk');
+    });
+
+    it('updates the send button tooltip and accessible label for Stop mode', () => {
+        const { ctx } = loadInputModule();
+        const sendBtn = ctx.document.getElementById('chat-send-btn');
+
+        ctx.setChatButtonsEnabled(false);
+        assert.strictEqual(sendBtn.title, 'Stop generating');
+        assert.strictEqual(sendBtn['aria-label'], 'Stop generating');
+
+        ctx.setChatButtonsEnabled(true);
+        assert.strictEqual(sendBtn.title, 'Send message');
+        assert.strictEqual(sendBtn['aria-label'], 'Send message');
     });
 
     it('does not show pre-stream dots over an active stream', () => {

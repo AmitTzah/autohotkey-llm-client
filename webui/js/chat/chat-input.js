@@ -129,10 +129,14 @@ function setChatButtonsEnabled(enabled) {
   if (sendBtn) {
     if (enabled) {
       sendBtn.innerHTML = '<i data-lucide="send"></i>';
+      sendBtn.title = 'Send message';
+      sendBtn.setAttribute('aria-label', 'Send message');
       sendBtn.disabled = false;
       sendBtn.onclick = onChatSend;
     } else {
       sendBtn.innerHTML = '<i data-lucide="square"></i>';
+      sendBtn.title = 'Stop generating';
+      sendBtn.setAttribute('aria-label', 'Stop generating');
       sendBtn.disabled = false;
       sendBtn.onclick = onStopStreaming;
     }
