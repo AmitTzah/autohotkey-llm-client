@@ -332,3 +332,8 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 } // end DOMContentLoaded guard
+
+
+if (typeof window !== 'undefined') window.ModelPickerConfig = {
+  init: openModelSettings
+};

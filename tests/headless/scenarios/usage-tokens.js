@@ -31,11 +31,11 @@ scenarios.push({
     const rp = fs.readFileSync(path.join(launcher.REPO_ROOT, 'app', 'RequestProcessor.ahk'), 'utf8');
     const dash = fs.readFileSync(path.join(launcher.REPO_ROOT, 'app', 'viewers', 'UsageDashboard.ahk'), 'utf8');
     const cw = fs.readFileSync(path.join(launcher.REPO_ROOT, 'chat', 'ChatWindow.ahk'), 'utf8');
-    const mainJs = fs.readFileSync(path.join(launcher.REPO_ROOT, 'webui', 'js', 'main.js'), 'utf8');
+    const routerJs = fs.readFileSync(path.join(launcher.REPO_ROOT, 'webui', 'js', 'shared', 'web-message-router.js'), 'utf8');
     const actionHandled = /command = "usage:"[\s\S]*?ShowUsageDashboard\(\)/.test(rp);
     const ipcSent = /CustomMessages\.notifyShowDashboard\(hwnd\)/.test(dash);
     const ipcHandled = /WM_SHOW_DASHBOARD[\s\S]*?postWebMessage\("showDashboard"\)/.test(cw);
-    const jsShows = /case 'showDashboard':[\s\S]*?_showDashboard\(\)/.test(mainJs);
+    const jsShows = /case 'showDashboard':[\s\S]*?AppShell\.showDashboard\(\)/.test(routerJs);
     if (!actionHandled || !ipcSent || !ipcHandled || !jsShows)
       throw new Error('Quick Access -> usage dashboard wiring broken: ' + JSON.stringify({ actionHandled, ipcSent, ipcHandled, jsShows }));
     return 'usage: action -> ShowUsageDashboard -> WM_SHOW_DASHBOARD -> showDashboard -> _showDashboard (wired; no key injection)';

@@ -1150,7 +1150,7 @@ scenarios.push({
 
 scenarios.push({
   id: 108,
-  name: "main.js IPC routing uses an explicit allowlist (arbitrary window[target] removed)",
+  name: "Web message routing uses an explicit allowlist (arbitrary window[target] removed)",
   regression: true, // FIXED bug kept as a regression check (security: crafted targets must not invoke globals)
   mode: null,
   noApp: true,
@@ -1158,14 +1158,14 @@ scenarios.push({
     const fs=require("node:fs");
     const path=require("node:path");
     const launcher=require("../launch");
-    const main=fs.readFileSync(path.join(launcher.REPO_ROOT,"webui","js","main.js"),"utf8");
+    const router=fs.readFileSync(path.join(launcher.REPO_ROOT,"webui","js","shared","web-message-router.js"),"utf8");
     // FIXED (bug #108): no dynamic window[target] invocation - the legacy
-    // targets (updateTopbarTitle/updateBranchInfo) now have explicit cases.
-    const hasDynamicCall = /window\[target\]\(/.test(main);
-    const hasAllowlist = /case 'updateTopbarTitle':/.test(main) && /case 'updateBranchInfo':/.test(main);
+    // targets (updateTopbarTitle/updateBranchInfo) have explicit router cases.
+    const hasDynamicCall = /window\[target\]\(/.test(router) || /root\[target\]\(/.test(router);
+    const hasAllowlist = /case 'updateTopbarTitle':/.test(router) && /case 'updateBranchInfo':/.test(router);
     if(hasDynamicCall || !hasAllowlist)
       throw new Error("bug #108 not fixed: hasDynamicCall="+hasDynamicCall+" hasAllowlist="+hasAllowlist);
-    return "main.js handleWebMessage routes updateTopbarTitle/updateBranchInfo via explicit cases and never calls window[target], so a crafted IPC target cannot invoke arbitrary globals";
+    return "WebMessageRouter routes updateTopbarTitle/updateBranchInfo via explicit cases and never dispatches target names dynamically, so a crafted IPC target cannot invoke arbitrary globals";
   }
 });
 

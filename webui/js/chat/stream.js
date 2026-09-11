@@ -535,3 +535,20 @@ function addStreamingActions(bubble, index) {
   existing.innerHTML = '';
   addMessageActions(existing, msg, index);
 }
+
+
+var _chatStreamInitialized = false;
+if (typeof window !== 'undefined') window.ChatStream = {
+  init: function() {
+    if (_chatStreamInitialized) return;
+    _chatStreamInitialized = true;
+
+    var chatScrollEl = document.getElementById('chat-scroll');
+    if (!chatScrollEl) return;
+
+    chatScrollEl.addEventListener('scroll', function() {
+      var distanceFromBottom = chatScrollEl.scrollHeight - chatScrollEl.scrollTop - chatScrollEl.clientHeight;
+      streamState.userScrolledUp = distanceFromBottom > 5;
+    });
+  }
+};

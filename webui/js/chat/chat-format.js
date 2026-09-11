@@ -253,3 +253,20 @@ function updateTokenUsage(data) {
 
   if (typeof lucide !== 'undefined') lucide.createIcons();
 }
+
+
+var _chatFormatInitialized = false;
+if (typeof window !== 'undefined') window.ChatFormat = {
+  init: function() {
+    if (_chatFormatInitialized) return;
+    _chatFormatInitialized = true;
+
+    showTokenUsageBar();
+
+    var copyAllBtn = document.getElementById('copy-entire-chat-btn');
+    if (copyAllBtn) copyAllBtn.addEventListener('click', copyEntireChat);
+
+    var exportChatBtn = document.getElementById('export-chat-btn');
+    if (exportChatBtn) exportChatBtn.addEventListener('click', exportChat);
+  }
+};

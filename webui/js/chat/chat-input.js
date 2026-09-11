@@ -261,3 +261,16 @@ function autoResizeChatInput() {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 200) + 'px';
 }
+
+
+var _chatInputInitialized = false;
+if (typeof window !== 'undefined') window.ChatInput = {
+  init: function() {
+    if (_chatInputInitialized) return;
+    _chatInputInitialized = true;
+    var chatInput = document.getElementById('chat-input');
+    if (!chatInput) return;
+    chatInput.addEventListener('keydown', handleChatInputKeydown);
+    chatInput.addEventListener('input', autoResizeChatInput);
+  }
+};

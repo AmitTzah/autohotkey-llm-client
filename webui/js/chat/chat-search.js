@@ -341,3 +341,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (leftScroll) leftScroll.addEventListener('scroll', closeSearchDropdown);
     if (rightPanel) rightPanel.addEventListener('scroll', closeSearchDropdown);
 });
+
+
+if (typeof window !== 'undefined') window.ChatSearch = {
+  init: initSearch
+};

@@ -63,17 +63,30 @@ function closeTreeModal() {
   }
 }
 
-// Wire tree close button, overlay click, and zoom/pan (guarded for test sandboxes)
-if (typeof document !== 'undefined' && document.addEventListener) {
-  document.addEventListener('DOMContentLoaded', function() {
-    var treeClose = document.getElementById('treeClose');
-    var treeOverlay = document.getElementById('treeOverlay');
-    if (treeClose) treeClose.addEventListener('click', function() { closeTreeModal(); });
-    if (treeOverlay) treeOverlay.addEventListener('click', function(e) { if (e.target === treeOverlay) closeTreeModal(); });
+var _chatTreeModalInitialized = false;
 
-    initTreeZoom();
-  });
+function initChatTreeModalUi() {
+  if (_chatTreeModalInitialized) return;
+  _chatTreeModalInitialized = true;
+
+  var treeBtn = document.getElementById('treeBtn');
+  var treeClose = document.getElementById('treeClose');
+  var treeOverlay = document.getElementById('treeOverlay');
+
+  if (treeBtn) treeBtn.addEventListener('click', toggleTreeModal);
+  if (treeClose) treeClose.addEventListener('click', closeTreeModal);
+  if (treeOverlay) {
+    treeOverlay.addEventListener('click', function(e) {
+      if (e.target === treeOverlay) closeTreeModal();
+    });
+  }
+
+  initTreeZoom();
 }
+
+if (typeof window !== 'undefined') window.ChatTreeModal = {
+  init: initChatTreeModalUi
+};
 
 // Initialize zoom/pan for the conversation tree modal.
 function initTreeZoom() {

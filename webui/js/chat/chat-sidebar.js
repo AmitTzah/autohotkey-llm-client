@@ -345,3 +345,83 @@ function threadForked(data) {
   loadThread(data.newThreadId);
   Ipc.postToHost('sidebarAction', { subAction: 'loadThreadList' });
 }
+
+
+var _chatSidebarInitialized = false;
+
+function _wireTopbarRename() {
+  var renameBtn = document.querySelector('.rename-chat-btn');
+  if (!renameBtn) return;
+
+  renameBtn.addEventListener('click', function() {
+    var titleEl = document.querySelector('.title-text');
+    if (!titleEl || titleEl.querySelector('input')) return;
+
+    var currentTitle = titleEl.textContent;
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentTitle;
+    input.style.cssText = 'font:inherit;color:inherit;background:var(--bg-hover);border:1px solid var(--border-main);border-radius:6px;padding:2px 8px;width:300px;outline:none;';
+    titleEl.textContent = '';
+    titleEl.appendChild(input);
+    input.focus();
+    input.select();
+
+    var save = function() {
+      var newTitle = input.value.trim();
+      titleEl.textContent = newTitle || currentTitle;
+      if (newTitle && newTitle !== currentTitle) {
+        Ipc.postToHost('sidebarAction', { subAction: 'renameThread', threadId: activeThreadId, title: newTitle });
+      }
+    };
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') input.blur();
+      if (e.key === 'Escape') titleEl.textContent = currentTitle;
+    });
+  });
+}
+
+function _wireNewFolderButton() {
+  var newFolderBtn = document.querySelector('.rail-head-actions button[title="New folder"]');
+  if (!newFolderBtn) return;
+
+  newFolderBtn.addEventListener('click', function() {
+    var headActions = document.querySelector('.rail-head-actions');
+    if (!headActions || headActions.querySelector('.inline-folder-input')) return;
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'inline-folder-input';
+    input.placeholder = 'Folder name';
+    input.style.cssText = 'font-size:0.85rem;padding:4px 8px;border:1px solid var(--border-main);border-radius:4px;background:var(--bg-panel);color:var(--text-primary);width:120px;outline:none;';
+    headActions.appendChild(input);
+    input.focus();
+
+    var save = function() {
+      var name = input.value.trim();
+      input.remove();
+      if (name) Ipc.postToHost('sidebarAction', { subAction: 'createFolder', name: name });
+    };
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') input.blur();
+      if (e.key === 'Escape') input.remove();
+    });
+  });
+}
+
+if (typeof window !== 'undefined') window.ChatSidebar = {
+  init: function() {
+    if (_chatSidebarInitialized) return;
+    _chatSidebarInitialized = true;
+
+    _wireTopbarRename();
+    _wireNewFolderButton();
+
+    var newChatBtn = document.getElementById('new-chat-btn');
+    if (newChatBtn) newChatBtn.addEventListener('click', newChat);
+  }
+};
