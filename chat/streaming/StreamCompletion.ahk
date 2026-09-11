@@ -100,6 +100,11 @@ _NotifyGenerationComplete(threadId := "") {
 }
 
 _PlayCompletionSound(soundType := "system", customPath := "", fallbackToSystem := true) {
+    ; Headless E2E workers exercise many successful completions in parallel.
+    ; They must never emit host audio; treat playback as a successful no-op so
+    ; both automatic completion cues and the Settings "Test" action stay silent.
+    if EnvGet("AHKLLM_E2E_WORKER") != ""
+        return true
     if soundType = "custom" {
         if customPath && FileExist(customPath) {
             try {

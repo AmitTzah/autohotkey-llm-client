@@ -447,6 +447,19 @@ class StreamErrorTest {
             throw Error("system completion sound should use the native Windows PlaySound alias")
     }
 
+    CompletionSound_E2EWorker_IsSilentNoOp() {
+        oldWorker := EnvGet("AHKLLM_E2E_WORKER")
+        try {
+            EnvSet("AHKLLM_E2E_WORKER", "unit-silent-audio")
+            ; A missing custom file with fallback disabled normally returns false.
+            ; In an E2E worker it must short-circuit before any host playback/file path.
+            if !_PlayCompletionSound("custom", "Z:\definitely-missing-ahkllm-e2e-sound.wav", false)
+                throw Error("E2E completion sound suppression should be a successful no-op")
+        } finally {
+            EnvSet("AHKLLM_E2E_WORKER", oldWorker)
+        }
+    }
+
     PartialPersist_RefreshesSidebar() {
         src := FileRead(A_ScriptDir "\..\chat\streaming\StreamError.ahk")
         if !RegExMatch(src, "postThreadStats\(streamThreadId\)[\s\S]{0,400}?_postThreadListRefresh\(\)")
