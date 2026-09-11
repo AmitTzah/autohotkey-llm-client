@@ -35,9 +35,58 @@ var md = window.markdownit({
 })
   .use(window.texmath, {
     engine: window.katex,
-    delimiters: 'dollars',
+    delimiters: ['dollars', 'brackets'],
     katexOptions: { macros: { "\\RR": "\\mathbb{R}" } }
   });
+
+// markdown-it-texmath recognizes \\[...\\] as block math only when the
+// opening delimiter starts a Markdown block. Models commonly put a label on
+// the immediately preceding line, so ensure a block boundary before a
+// standalone \\[ delimiter. Fenced and indented code remain literal.
+function _normalizeBracketDisplayMath(content) {
+  var lines = String(content || '').split('\n');
+  var output = [];
+  var fenceChar = '';
+  var fenceLength = 0;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      var marker = fenceMatch[1];
+      if (!fenceChar) {
+        fenceChar = marker.charAt(0);
+        fenceLength = marker.length;
+      } else if (marker.charAt(0) === fenceChar && marker.length >= fenceLength) {
+        fenceChar = '';
+        fenceLength = 0;
+      }
+      output.push(line);
+      continue;
+    }
+
+    var isIndentedCode = /^(?: {4}|\t)/.test(line);
+    var isOpen = !fenceChar && !isIndentedCode && /^\\\[\s*$/.test(line);
+    var isClose = !fenceChar && !isIndentedCode && /^\\\]\s*$/.test(line);
+
+    if (isOpen && output.length && output[output.length - 1].trim() !== '') {
+      output.push('');
+    }
+
+    output.push(line);
+
+    if (isClose && i + 1 < lines.length && lines[i + 1].trim() !== '') {
+      output.push('');
+    }
+  }
+
+  return output.join('\n');
+}
+
+var _markdownRender = md.render.bind(md);
+md.render = function(content, env) {
+  return _markdownRender(_normalizeBracketDisplayMath(content), env);
+};
 
 // Keep external web navigation out of the application WebView. Model and user
 // markdown is untrusted content, so only HTTP(S) links are handed to the host;

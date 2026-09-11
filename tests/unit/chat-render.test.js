@@ -362,6 +362,37 @@ describe('assistant content single-newline rendering (bug #222)', () => {
     });
 });
 
+describe('math rendering', () => {
+    it('renders dollar and bracket LaTeX delimiters through KaTeX', () => {
+        const vendorDir = path.resolve(__dirname, '..', '..', 'webui', 'js', 'vendor');
+        const mdFactory = require(path.join(vendorDir, 'markdown-it.min.js'));
+        const katex = require(path.join(vendorDir, 'katex.min.js'));
+        const texmath = require(path.join(vendorDir, 'texmath.min.js'));
+        const md = mdFactory({ html: false, breaks: true, linkify: true, typographer: true })
+            .use(texmath, {
+                engine: katex,
+                delimiters: ['dollars', 'brackets'],
+                katexOptions: { macros: { '\\RR': '\\mathbb{R}' } }
+            });
+
+        const cases = [
+            '$E = mc^2$',
+            '$$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$',
+            '\\(a^2 + b^2 = c^2\\)',
+            '\\[\n\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}\n\\]'
+        ];
+
+        for (const input of cases) {
+            const html = md.render(input);
+            assert.match(html, /class="katex(?:\s|"|-)/, 'expected KaTeX markup for: ' + input + '\n' + html);
+        }
+
+        const bracketDisplay = md.render('\\[\n\\sum_{n=1}^{\\infty} n^{-2}\n\\]');
+        assert.match(bracketDisplay, /class="katex-display"/, 'bracket display math must render in display mode: ' + bracketDisplay);
+        assert.ok(!bracketDisplay.includes('\\[') && !bracketDisplay.includes('\\]'), 'bracket delimiters must be consumed by texmath: ' + bracketDisplay);
+    });
+});
+
 describe('_buildReasoningHtml', () => {
     it('returns empty for no reasoning', () => {
         const ctx = loadRenderModule();
