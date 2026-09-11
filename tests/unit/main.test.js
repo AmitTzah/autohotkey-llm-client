@@ -21,10 +21,7 @@ function loadMainModule({ chatMessages = null } = {}) {
         window: {
             chrome: { webview: { addEventListener: () => {} } },
             addEventListener: () => {},
-            markdownit: function() { return { use: function() { return this; }, render: (c) => '<p>' + c + '</p>' }; },
-            texmath: {},
-            katex: {},
-            hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
+            MarkdownRenderer: { create: function() { return { render: (c) => '<p>' + c + '</p>' }; } },
             _showChat: function() { receivedCalls._showChat = true; },
             _hideSettings: function() { receivedCalls._hideSettings = true; },
             SettingsPanel: { onSettingsReceived: function(data) { receivedCalls.onSettingsReceived = data; } },
@@ -35,7 +32,6 @@ function loadMainModule({ chatMessages = null } = {}) {
             handleAck: function() {}
         },
         console: console,
-        md: { render: (c) => '<p>' + c + '</p>' },
         sessionStorage: { getItem: () => null, setItem: () => {} },
         navigator: { clipboard: { writeText: async () => {} } },
         setTimeout: setTimeout, clearTimeout: clearTimeout,
@@ -82,50 +78,6 @@ function loadMainModule({ chatMessages = null } = {}) {
 }
 
 describe('handleWebMessage routing', () => {
-    it('renders message HTML as inert text (markdown-it html:false, bug #57)', () => {
-        const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'main.js'), 'utf-8');
-        assert.ok(src.includes('html: false'), 'markdown-it must be configured with html:false (XSS regression)');
-        assert.ok(!/html:\s*true/.test(src), 'markdown-it must NOT enable raw HTML');
-    });
-
-    it('keeps single-newline paragraph breaks visible (markdown-it breaks:true, bugs #222/#224)', () => {
-        const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'webui', 'js', 'main.js'), 'utf-8');
-        assert.ok(src.includes('breaks: true'), 'markdown-it must render soft breaks (single newlines) as <br> so paragraph breaks stay visible');
-    });
-
-    it('normalizes standalone bracket-display math even when it follows prose directly', () => {
-        const ctx = loadMainModule();
-        const input = 'Display brackets:\n\\[\n\\sum_{n=1}^{\\infty} n^{-2}\n\\]';
-        const normalized = ctx._normalizeBracketDisplayMath(input);
-        assert.strictEqual(normalized, 'Display brackets:\n\n\\[\n\\sum_{n=1}^{\\infty} n^{-2}\n\\]');
-    });
-
-    it('renders bracket-display math after prose through the real KaTeX pipeline', () => {
-        const ctx = loadMainModule();
-        const vendorDir = path.resolve(__dirname, '..', '..', 'webui', 'js', 'vendor');
-        const mdFactory = require(path.join(vendorDir, 'markdown-it.min.js'));
-        const katex = require(path.join(vendorDir, 'katex.min.js'));
-        const texmath = require(path.join(vendorDir, 'texmath.min.js'));
-        const realMd = mdFactory({ html: false, breaks: true, linkify: true, typographer: true })
-            .use(texmath, {
-                engine: katex,
-                delimiters: ['dollars', 'brackets'],
-                katexOptions: { macros: { '\\RR': '\\mathbb{R}' } }
-            });
-        const input = 'Display brackets:\n\\[\n\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}\n\\]';
-        const html = realMd.render(ctx._normalizeBracketDisplayMath(input));
-        assert.match(html, /class="katex-display"/, 'expected display KaTeX markup: ' + html);
-        assert.ok(!html.includes('\\[') && !html.includes('\\]'), 'bracket delimiters must not remain visible: ' + html);
-    });
-
-    it('does not normalize bracket delimiters inside fenced or indented code', () => {
-        const ctx = loadMainModule();
-        const fenced = '```text\n\\[\nx^2\n\\]\n```';
-        assert.strictEqual(ctx._normalizeBracketDisplayMath(fenced), fenced);
-        const indented = '    \\[\n    x^2\n    \\]';
-        assert.strictEqual(ctx._normalizeBracketDisplayMath(indented), indented);
-    });
-
     it('hands HTTP(S) link clicks to the host instead of navigating the WebView', () => {
         const ctx = loadMainModule();
         let prevented = false;

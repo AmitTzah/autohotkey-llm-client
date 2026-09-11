@@ -768,13 +768,23 @@ scenarios.push({
   mode: null,
   noApp: true,
   async body() {
-    const cc=require("node:fs").readFileSync(require("node:path").join(require("../launch").REPO_ROOT,"webui","js","chat","chat-core.js"),"utf8");
+    const fs=require("node:fs");
+    const path=require("node:path");
+    const root=require("../launch").REPO_ROOT;
+    const cc=fs.readFileSync(path.join(root,"webui","js","chat","chat-core.js"),"utf8");
+    const main=fs.readFileSync(path.join(root,"webui","js","main.js"),"utf8");
+    const renderer=fs.readFileSync(path.join(root,"webui","js","shared","markdown-renderer.js"),"utf8");
+    const index=fs.readFileSync(path.join(root,"webui","index.html"),"utf8");
     const hasMdRender = /contentElement\.innerHTML = result/.test(cc) && /md\.render\(contentToRender\)/.test(cc);
-    const main=require("node:fs").readFileSync(require("node:path").join(require("../launch").REPO_ROOT,"webui","js","main.js"),"utf8");
-    const htmlSafe = /html: false/.test(main);
-    const htmlTrue = /markdownit\(\{[^}]*html: true/.test(main);
-    if(!hasMdRender || !htmlSafe || htmlTrue) throw new Error("bug #86/#57 not fixed: hasMdRender=" + hasMdRender + " htmlSafe=" + htmlSafe + " htmlTrue=" + htmlTrue);
-    return "chat-core.js renderMarkdown renders via the html:false md instance (fixed by #57), so FIM fallback content is inert";
+    const usesSharedRenderer = /var md = window\.MarkdownRenderer\.create\(\)/.test(main);
+    const htmlSafe = /html:\s*false/.test(renderer);
+    const htmlTrue = /markdownit\(\{[^}]*html:\s*true/.test(renderer);
+    const rendererScript = index.indexOf('js/shared/markdown-renderer.js');
+    const mainScript = index.indexOf('js/main.js');
+    const rendererLoadsFirst = rendererScript >= 0 && mainScript > rendererScript;
+    if(!hasMdRender || !usesSharedRenderer || !htmlSafe || htmlTrue || !rendererLoadsFirst)
+      throw new Error("bug #86/#57 not fixed: hasMdRender=" + hasMdRender + " usesSharedRenderer=" + usesSharedRenderer + " htmlSafe=" + htmlSafe + " htmlTrue=" + htmlTrue + " rendererLoadsFirst=" + rendererLoadsFirst);
+    return "chat-core.js renderMarkdown uses the shared html:false MarkdownRenderer loaded before main.js, so FIM fallback content is inert";
   }
 });
 

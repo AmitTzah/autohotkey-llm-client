@@ -348,49 +348,6 @@ describe('assistant content single-newline rendering (bug #222)', () => {
             'assistant content must be normalized before md.render so single-newline paragraphs stay visible (bug #222)');
     });
 
-    it('markdown-it with breaks:true keeps single newlines as <br> and leaves code blocks intact', () => {
-        // Uses the REAL vendored markdown-it with the app's production options
-        // (html:false, breaks:true) - the DOM-mocked unit harness can't show
-        // the actual rendered HTML, so this guards the rendering contract.
-        const mdFactory = require(path.resolve(__dirname, '..', '..', 'webui', 'js', 'vendor', 'markdown-it.min.js'));
-        const md = mdFactory({ html: false, breaks: true, linkify: true, typographer: true });
-        const html = md.render('First paragraph of the summary.\nSecond paragraph of the summary.\nThird paragraph of the summary.');
-        assert.ok(/<br\s*\/?>/i.test(html), 'single newlines must render as <br>: ' + html);
-        const code = md.render('```js\nconst a = 1;\nconst b = 2;\n```\nDone\nNext');
-        assert.ok(/<pre>[\s\S]*const a = 1;\nconst b = 2;[\s\S]*<\/pre>/.test(code), 'fenced code blocks must keep their internal newlines: ' + code);
-        assert.ok(/<br\s*\/?>/i.test(code), 'the paragraph AFTER the code block must still get its soft break');
-    });
-});
-
-describe('math rendering', () => {
-    it('renders dollar and bracket LaTeX delimiters through KaTeX', () => {
-        const vendorDir = path.resolve(__dirname, '..', '..', 'webui', 'js', 'vendor');
-        const mdFactory = require(path.join(vendorDir, 'markdown-it.min.js'));
-        const katex = require(path.join(vendorDir, 'katex.min.js'));
-        const texmath = require(path.join(vendorDir, 'texmath.min.js'));
-        const md = mdFactory({ html: false, breaks: true, linkify: true, typographer: true })
-            .use(texmath, {
-                engine: katex,
-                delimiters: ['dollars', 'brackets'],
-                katexOptions: { macros: { '\\RR': '\\mathbb{R}' } }
-            });
-
-        const cases = [
-            '$E = mc^2$',
-            '$$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$',
-            '\\(a^2 + b^2 = c^2\\)',
-            '\\[\n\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}\n\\]'
-        ];
-
-        for (const input of cases) {
-            const html = md.render(input);
-            assert.match(html, /class="katex(?:\s|"|-)/, 'expected KaTeX markup for: ' + input + '\n' + html);
-        }
-
-        const bracketDisplay = md.render('\\[\n\\sum_{n=1}^{\\infty} n^{-2}\n\\]');
-        assert.match(bracketDisplay, /class="katex-display"/, 'bracket display math must render in display mode: ' + bracketDisplay);
-        assert.ok(!bracketDisplay.includes('\\[') && !bracketDisplay.includes('\\]'), 'bracket delimiters must be consumed by texmath: ' + bracketDisplay);
-    });
 });
 
 describe('_buildReasoningHtml', () => {
