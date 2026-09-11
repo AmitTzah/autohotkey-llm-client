@@ -460,6 +460,23 @@ class StreamErrorTest {
         }
     }
 
+    CancelStream_FinalizesBeforeComposerReenable() {
+        src := FileRead(A_ScriptDir "\..\chat\streaming\StreamError.ahk")
+        cancelStart := InStr(src, "handleCancelStream() {")
+        cancelEnd := InStr(src, "_logCancelledRequest() {", false, cancelStart)
+        cancelBlock := SubStr(src, cancelStart, cancelEnd - cancelStart)
+        if InStr(cancelBlock, 'if !_HasOtherActiveOperations("", stream)') && InStr(cancelBlock, 'postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)')
+            throw Error("active stream cancel must not re-enable composer before streamCancelled finalizes the bubble")
+
+        finalizeStart := InStr(src, "_handleStreamCancelled() {")
+        finalizeEnd := InStr(src, "; Called by Dispatch.ahk", false, finalizeStart)
+        finalizeBlock := SubStr(src, finalizeStart, finalizeEnd - finalizeStart)
+        cancelledPos := InStr(finalizeBlock, 'postWebMessage("streamCancelled"')
+        enablePos := InStr(finalizeBlock, 'postWebMessage("setChatButtonsEnabled", true)')
+        if !cancelledPos || !enablePos || cancelledPos > enablePos
+            throw Error("streamCancelled must be posted before the composer is re-enabled")
+    }
+
     PartialPersist_RefreshesSidebar() {
         src := FileRead(A_ScriptDir "\..\chat\streaming\StreamError.ahk")
         if !RegExMatch(src, "postThreadStats\(streamThreadId\)[\s\S]{0,400}?_postThreadListRefresh\(\)")

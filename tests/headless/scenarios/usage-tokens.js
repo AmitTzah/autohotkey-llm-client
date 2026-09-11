@@ -478,6 +478,7 @@ scenarios.push({
     await sendChatMessage(cdp, 'first question');
     await waitStreamingIdle(cdp, 40000);
     await sleep(1000);
+    const botCountBeforeCancel = await cdp.eval('document.querySelectorAll("#chat-messages .msg.bot").length');
 
     // Exchange 2 starts; cancel it AFTER at least one SSE chunk has been
     // read into the stream state (partial content), but BEFORE the usage
@@ -490,6 +491,28 @@ scenarios.push({
     await cdp.click('#chat-send-btn');
     await waitStreamingIdle(cdp, 30000);
     await sleep(1200);
+
+    // UI regression: Stop during DeepSeek reasoning must finalize the ONE
+    // in-flight assistant bubble. Previously the host re-enabled the composer
+    // before streamCancelled, clearing streamState; a trailing reasoning delta
+    // then opened a second tiny assistant bubble while the original kept its
+    // hourglass spinner.
+    const cancelUi = await cdp.eval(`(() => {
+      const bots = Array.from(document.querySelectorAll('#chat-messages .msg.bot'));
+      const last = bots[bots.length - 1] || null;
+      const summary = last && last.querySelector('.thinking-block summary');
+      return {
+        botCount: bots.length,
+        pulseCount: document.querySelectorAll('#chat-messages .msg.bot .thinking-pulse').length,
+        lastThoughtSummary: summary ? summary.textContent : ''
+      };
+    })()`);
+    if (cancelUi.botCount !== botCountBeforeCancel + 1)
+      throw new Error('Stop created duplicate assistant bubbles: before=' + botCountBeforeCancel + ' after=' + JSON.stringify(cancelUi));
+    if (cancelUi.pulseCount !== 0)
+      throw new Error('cancelled reasoning left a live Thought Process spinner: ' + JSON.stringify(cancelUi));
+    if (String(cancelUi.lastThoughtSummary).toLowerCase().indexOf('cancelled') < 0)
+      throw new Error('cancelled reasoning bubble was not finalized as cancelled: ' + JSON.stringify(cancelUi));
 
     const msgs = seed.query(dbPath, "SELECT role, content, token_count, prompt_tokens, active_path_tokens, model FROM messages ORDER BY created_at");
     const thread = seed.query(dbPath, 'SELECT cumulative_input_tokens, cumulative_output_tokens, cumulative_cached_tokens FROM chat_threads')[0];
@@ -519,7 +542,7 @@ scenarios.push({
     const bar = await cdp.eval('document.getElementById("tokenBar").textContent');
     if (String(bar).indexOf('\u2191 12') < 0 || String(bar).indexOf('\u2191 33') >= 0)
       throw new Error('header token bar must agree with the dashboard (\u2191 12, not \u2191 33): ' + JSON.stringify(bar));
-    return 'cancelled mid-stream: partial row=' + JSON.stringify(partial) +
+    return 'cancelled mid-stream: one assistant bubble finalized (' + JSON.stringify(cancelUi) + '), partial row=' + JSON.stringify(partial) +
       ', chat_usage=' + JSON.stringify(usage) + ' (1 completed call only), thread counters=' +
       JSON.stringify(thread) + ' (12/9/4 - un-billed context never charged), header=' + JSON.stringify(bar);
   }

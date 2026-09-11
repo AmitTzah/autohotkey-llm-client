@@ -91,7 +91,13 @@ function onStreamContent(text, threadId) {
 // Accepts either a string (legacy) or {content, collapsed} object.
 function onStreamReasoning(data, threadId) {
   if (threadId && activeThreadId && threadId !== activeThreadId) return;
-  if (!streamState.active) startStreaming();
+  if (!streamState.active) {
+    // A terminal streamCancelled/streamDone already finalized this request.
+    // Any reasoning event that arrives afterwards is stale buffered SSE from
+    // the cancelled request; never let it start a second assistant bubble.
+    if (streamState.finalized) return;
+    startStreaming();
+  }
 
   var text = typeof data === 'string' ? data : (data.content || '');
   var collapsed = (typeof data === 'object' && data.collapsed) || false;

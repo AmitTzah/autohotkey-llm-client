@@ -259,10 +259,12 @@ handleCancelStream() {
         if cURLState("get") = pid
             cURLState("set", 0)
     }
-    ; The Stop button re-wires to Send immediately, but the composer itself
-    ; only re-enables when no OTHER request is still streaming.
-    if !_HasOtherActiveOperations("", stream)
-        postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+    ; Do not re-enable the composer here. Killing cURL only requests
+    ; cancellation; the poll/finalize path still has to read any buffered
+    ; SSE, persist the partial, and post streamCancelled. Re-enabling now
+    ; clears the WebView stream state too early and lets a trailing reasoning
+    ; delta open a second assistant bubble. _handleStreamCancelled re-enables
+    ; the composer after streamCancelled has been posted.
     } catch Error as e {
         debugLog("handleCancelStream error: " e.Message "`n" e.Stack, "ErrorHandler")
         if !_HasOtherActiveOperations()

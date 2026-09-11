@@ -1142,7 +1142,7 @@ _finalizeStreaming() {
         _readStreamChunkFromParams()
         contentLen := StrLen(requestParams["_streamContent"])
         reasoningLen := StrLen(requestParams["_streamReasoning"])
-        debugLog("[STREAM] Done — content=" contentLen "chars reasoning=" reasoningLen "chars polls=" requestParams["_streamPollCount"])
+        debugLog("[STREAM] Finalizing — content=" contentLen "chars reasoning=" reasoningLen "chars polls=" requestParams["_streamPollCount"])
 
         wasCancelled := requestParams.Has("_streamCancelled") && requestParams["_streamCancelled"]
 

@@ -888,8 +888,6 @@ class ChatDispatchTest {
         }
         if !this._findCaptured(web.captured, "searchResults")
             throw Error("Short search query should post empty searchResults")
-        if !this._findCaptured(web.captured, "setChatButtonsEnabled")
-            throw Error("cancelStream should re-enable chat buttons")
     }
 
     ; Regression (bug #174): handleBranchSwitch bumps the thread's updated_at,

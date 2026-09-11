@@ -280,6 +280,21 @@ describe('cancelStreaming state', () => {
 });
 
 describe('late streamContent after finalize (Stop race)', () => {
+    it('ignores late reasoning after cancellation instead of starting a duplicate bubble', () => {
+        const ctx = loadStreamModule();
+        ctx.streamState.active = false;
+        ctx.streamState.finalized = true;
+        ctx.streamState.thinkingBuffer = '';
+        let starts = 0;
+        ctx.startStreaming = () => { starts++; ctx.streamState.active = true; };
+
+        ctx.onStreamReasoning({ content: 'The world', collapsed: false }, undefined);
+
+        assert.strictEqual(starts, 0, 'late reasoning must not start a new stream session');
+        assert.strictEqual(ctx.streamState.active, false);
+        assert.strictEqual(ctx.streamState.thinkingBuffer, '');
+    });
+
     // Regression: stopping a stream can let a final SSE chunk arrive after
     // the UI finalized the bubble. It must append to the last assistant
     // bubble - NOT open a duplicate message.
