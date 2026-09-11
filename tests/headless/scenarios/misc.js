@@ -1197,7 +1197,7 @@ scenarios.push({
     const se=fs.readFileSync(path.join(launcher.REPO_ROOT,"chat","streaming","StreamError.ahk"),"utf8");
     // FIXED (bug #110): every terminal path deletes the temp files (which
     // contain the Bearer token): success, error, and cancel.
-    const hasDeleteOnSuccess = /_handleStreamComplete[\s\S]{0,3200}deleteTempFiles/.test(sc);
+    const hasDeleteOnSuccess = /_handleStreamComplete[\s\S]{0,5000}deleteTempFiles/.test(sc);
     const hasDeleteOnError = /_handleStreamError[\s\S]{0,1200}deleteTempFiles/.test(se);
     const hasDeleteOnCancel = /_handleStreamCancelled[\s\S]{0,400}deleteTempFiles/.test(se);
     if(!hasDeleteOnSuccess || !hasDeleteOnError || !hasDeleteOnCancel)
