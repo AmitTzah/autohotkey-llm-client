@@ -120,7 +120,8 @@ class ThreadRepo {
 
     ; Get threads sorted by most recent first.
     static List(showTrash := false) {
-        query := "SELECT t.id, t.title, t.created_at, t.updated_at, t.active_leaf_id, t.folder_id, t.is_locked, COALESCE(f.name, '') AS folder_name FROM chat_threads t LEFT JOIN chat_folders f ON t.folder_id = f.id WHERE t.is_deleted=" (showTrash ? 1 : 0)
+        global appDefaultModel, assistants
+        query := "SELECT t.id, t.title, t.created_at, t.updated_at, t.active_leaf_id, t.assistant_id, t.model_override, t.folder_id, t.is_locked, COALESCE(f.name, '') AS folder_name FROM chat_threads t LEFT JOIN chat_folders f ON t.folder_id = f.id WHERE t.is_deleted=" (showTrash ? 1 : 0)
         query .= " ORDER BY t.updated_at DESC"
         table := ChatDB.db.Exec(query)
         threads := []
@@ -156,6 +157,25 @@ class ThreadRepo {
                     break
                 }
                 currentId := msg.parent_id
+            }
+            ; A brand-new/user-only thread has no assistant row yet. Its badge
+            ; should reflect the model configured for the thread instead of falling
+            ; through the UI's unknown-model fallback (OpenRouter). Preserve the
+            ; active-path assistant model above whenever one exists.
+            if !model && !currentId {
+                if row.model_override {
+                    model := row.model_override
+                } else if row.assistant_id && IsSet(assistants) {
+                    for asst in assistants {
+                        if asst.HasOwnProp("id") && asst.id = row.assistant_id {
+                            if asst.HasOwnProp("baseModel")
+                                model := asst.baseModel
+                            break
+                        }
+                    }
+                }
+                if !model && IsSet(appDefaultModel)
+                    model := appDefaultModel
             }
             ; Bug (locked chats): a locked thread's real title can leak intent
             ; (e.g. "Salary negotiation", "therapy notes"), so it is redacted

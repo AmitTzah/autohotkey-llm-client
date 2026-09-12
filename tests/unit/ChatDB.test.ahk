@@ -1742,6 +1742,36 @@ class ChatDBTest {
         this._teardown()
     }
 
+    Thread_List_EmptyThreadUsesConfiguredModelForBadge() {
+        global appDefaultModel, assistants
+        threadId := this._setup()
+        oldDefault := appDefaultModel
+        hadAssistants := IsSet(assistants)
+        oldAssistants := hadAssistants ? assistants : ""
+        try {
+            ChatDB.Thread_UpdateSettings(threadId, { modelOverride: "openai/gpt-5-mini" })
+            listed := ChatDB.Thread_List()[1].model
+            if listed != "openai/gpt-5-mini"
+                throw Error("empty thread badge should use model_override, got '" listed "'")
+
+            assistants := [{ id: "asst-icon", name: "Icon Assistant", baseModel: "anthropic/claude-sonnet-4", systemMessage: "", reasoning: "", temperature: "" }]
+            ChatDB.Thread_UpdateSettings(threadId, { assistantId: "asst-icon", modelOverride: "" })
+            listedAssistant := ChatDB.Thread_List()[1].model
+            if listedAssistant != "anthropic/claude-sonnet-4"
+                throw Error("empty assistant thread badge should use assistant base model, got '" listedAssistant "'")
+
+            ChatDB.Thread_UpdateSettings(threadId, { assistantId: "", modelOverride: "" })
+            appDefaultModel := "google/gemini-2.5-flash"
+            listedDefault := ChatDB.Thread_List()[1].model
+            if listedDefault != "google/gemini-2.5-flash"
+                throw Error("empty app-default thread badge should use appDefaultModel, got '" listedDefault "'")
+        } finally {
+            appDefaultModel := oldDefault
+            assistants := hadAssistants ? oldAssistants : []
+            this._teardown()
+        }
+    }
+
     ; Regression (bug #155): Thread_List's per-thread model must follow the
     ; ACTIVE path (the branch currently open), not the LAST-INSERTED assistant
     ; row (which may sit on an off-path branch after a retry/branch switch).

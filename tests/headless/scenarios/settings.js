@@ -2053,4 +2053,37 @@ scenarios.push({
   }
 });
 
+scenarios.push({
+  id: 346,
+  name: 'Brand-new chats use their configured provider icon instead of OpenRouter fallback',
+  regression: true,
+  mode: null,
+  settings: { newChatStartsWith: 'google/gemini-2.5-flash' },
+  fixtures: {
+    threads: [
+      { id: 't-icon-openai-346', title: 'OpenAI Empty', model_override: 'openai/gpt-5-mini' },
+      { id: 't-icon-deepseek-346', title: 'DeepSeek Empty', model_override: 'deepseek/deepseek-v4-pro' }
+    ]
+  },
+  async body({ cdp }) {
+    await showChat();
+    await cdp.waitFor('document.querySelectorAll("#thread-list .chat-item").length >= 2', 15000, 200, 'empty provider threads');
+
+    const srcFor = async (id) => cdp.eval(`(() => { const img = document.querySelector('#thread-list .chat-item[data-chat="${id}"] .chat-icon img'); return img ? (img.getAttribute('src') || '') : ''; })()`);
+    const openaiSrc = await srcFor('t-icon-openai-346');
+    const deepseekSrc = await srcFor('t-icon-deepseek-346');
+    if (openaiSrc.indexOf('openai.ico') < 0) throw new Error('empty OpenAI thread used wrong icon: ' + openaiSrc);
+    if (deepseekSrc.indexOf('deepseek.ico') < 0) throw new Error('empty DeepSeek thread used wrong icon: ' + deepseekSrc);
+
+    await cdp.click('#new-chat-btn');
+    await cdp.waitFor('window.activeThreadId && !window.activeThreadId.startsWith("t-icon-")', 15000, 200, 'new Google chat');
+    const newId = await cdp.eval('window.activeThreadId');
+    await cdp.waitFor(`(() => { const img = document.querySelector('#thread-list .chat-item[data-chat="${newId}"] .chat-icon img'); return img && String(img.getAttribute('src') || '').indexOf('google.ico') >= 0; })()`, 15000, 200, 'Google new-chat icon');
+    const googleSrc = await srcFor(newId);
+    if (googleSrc.indexOf('openrouter.ico') >= 0) throw new Error('new Google chat still used OpenRouter fallback: ' + googleSrc);
+
+    return 'empty/new chats show OpenAI, DeepSeek, and Google icons from their configured models; no OpenRouter fallback';
+  }
+});
+
 module.exports = scenarios;
