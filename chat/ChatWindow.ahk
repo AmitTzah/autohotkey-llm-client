@@ -125,6 +125,10 @@ CleanupOwnedTempFiles()
 #Include ChatUtils.ahk
 #Include ChatRequestBuilder.ahk
 #Include ChatIPC.ahk
+; No thread is active at process startup. Resolve the visible fresh-chat
+; state through General > New Chats Start With now, rather than leaving the
+; right rail on appDefaultModel until the first thread is created.
+_prepareFreshChatSettings()
 #Include tools\SearchToolExecutor.ahk
 SearchToolExecutor.RecoverAbandonedPlaceholders()
 

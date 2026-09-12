@@ -170,6 +170,11 @@ _OnWebViewReady() {
     _HandleRequestAllSettings()
     if activeThreadId
         _LoadThreadAndRefreshUI(activeThreadId)
+    else {
+        ; A threadless window still has an effective fresh-chat model.
+        postCurrentSettingsToWebView()
+        _sendDropdownLabel()
+    }
     threadBusy := activeThreadId ? _HasOtherActiveOperationsForThread(activeThreadId) : false
     postWebMessage("setChatButtonsEnabled", { enabled: !threadBusy, threadId: activeThreadId })
 }

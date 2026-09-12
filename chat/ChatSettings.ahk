@@ -48,6 +48,14 @@ _resetToDefaultSettings() {
     _ClearRequestOverrides()
 }
 
+; Reset the threadless/fresh-chat runtime state and then apply the user's
+; configured "New Chats Start With" choice. The app default model is only
+; the fallback when that preference is empty.
+_prepareFreshChatSettings() {
+    _resetToDefaultSettings()
+    return _applyNewChatDefault()
+}
+
 ; Apply an assistant's settings to requestParams and mark it active.
 ; Shared by handleSwitchAssistant and the new-chat default resolution.
 _applyAssistantToRequestParams(asst) {
@@ -99,7 +107,7 @@ _applyNewChatDefaultToFreshThread(threadId) {
     if s.modelOverride || s.assistantId || s.systemOverride || s.reasoningOverride || s.temperatureOverride != ""
         return false
     _resetToDefaultSettings()
-    if _applyNewChatDefault()
+    if _prepareFreshChatSettings()
         ChatDB.Thread_UpdateSettings(threadId, _CurrentSettingsObject())
     global responseWindowFontSize
     if IsSet(responseWindowFontSize) && responseWindowFontSize

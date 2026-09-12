@@ -216,6 +216,44 @@ class ChatDispatchTest {
             throw Error("_OnWebViewReady must re-push the assistant list on every page load (startup 500ms timer races slow loads)")
     }
 
+    OnWebViewReady_ThreadlessPostsFreshModelSettings() {
+        global activeThreadId, requestParams
+        web := this._captureWebView()
+        oldActive := IsSet(activeThreadId) ? activeThreadId : ""
+        oldModel := requestParams["singleAPIModelName"]
+        hadAssistant := requestParams.Has("activeAssistantId")
+        oldAssistant := hadAssistant ? requestParams["activeAssistantId"] : ""
+        try {
+            activeThreadId := ""
+            requestParams["singleAPIModelName"] := "openai/gpt-5-mini"
+            if requestParams.Has("activeAssistantId")
+                requestParams.Delete("activeAssistantId")
+            _OnWebViewReady()
+        } finally {
+            activeThreadId := oldActive
+            requestParams["singleAPIModelName"] := oldModel
+            if hadAssistant
+                requestParams["activeAssistantId"] := oldAssistant
+            else if requestParams.Has("activeAssistantId")
+                requestParams.Delete("activeAssistantId")
+            web.restore()
+        }
+        foundSettings := false
+        for _, json in web.captured {
+            if InStr(json, '"target":"threadSettings"') {
+                parsed := jsongo.Parse(json)
+                if parsed["data"]["model"] = "openai/gpt-5-mini" {
+                    foundSettings := true
+                    break
+                }
+            }
+        }
+        if !foundSettings
+            throw Error("_OnWebViewReady must publish the effective fresh-chat model when no thread is active")
+        if !this._findCaptured(web.captured, "dropdownLabel")
+            throw Error("_OnWebViewReady must publish the fresh-chat model label when no thread is active")
+    }
+
     ; Regression (bug #45): the WebView must receive the full merged settings
     ; on the ready handshake so ui-theme.js applies the response font (and
     ; other UI CSS vars) at startup, not only when Settings is opened.

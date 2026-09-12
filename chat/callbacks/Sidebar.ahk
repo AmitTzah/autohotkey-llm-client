@@ -46,13 +46,17 @@ _HandleThreadAction(action, params) {
             activeThreadId := ChatDB.Thread_Create()
             _resetToDefaultSettings()
             ; Start new chats with the configured default assistant/model.
-            if _applyNewChatDefault()
+            if _prepareFreshChatSettings()
                 ChatDB.Thread_UpdateSettings(activeThreadId, _CurrentSettingsObject())
             ; Apply default font size from settings to the new thread
             global responseWindowFontSize
             if IsSet(responseWindowFontSize) && responseWindowFontSize
                 ChatDB.Thread_UpdateSettings(activeThreadId, { fontSize: responseWindowFontSize })
             postWebMessage("loadThread", activeThreadId)
+            ; Publish the resolved new-chat model/assistant immediately. The
+            ; subsequent full load publishes the same persisted thread state.
+            postCurrentSettingsToWebView()
+            _sendDropdownLabel()
             _postThreadListRefresh()
 
         case "deleteThread":

@@ -226,6 +226,39 @@ class ChatSettingsTest {
         }
     }
 
+    test_prepareFreshChatSettings_appliesConfiguredModel_andClearsStaleThreadState() {
+        global newChatStartsWith, requestParams
+
+        oldDefault := newChatStartsWith
+        oldParams := requestParams
+        try {
+            newChatStartsWith := "openai/gpt-5-mini"
+            requestParams := Map(
+                "singleAPIModelName", "deepseek/deepseek-v4-pro",
+                "activeAssistantId", "stale-asst",
+                "systemOverride", "stale system",
+                "reasoningOverride", "high",
+                "temperatureOverride", "0.4",
+                "webSearch", true
+            )
+
+            applied := _prepareFreshChatSettings()
+            if !applied
+                throw Error("configured fresh-chat model should apply")
+            if requestParams["singleAPIModelName"] != "openai/gpt-5-mini"
+                throw Error("fresh-chat model was not applied")
+            if requestParams.Has("activeAssistantId")
+                throw Error("fresh-chat model should clear a stale assistant")
+            if requestParams["systemOverride"] != "" || requestParams["reasoningOverride"] != "" || requestParams["temperatureOverride"] != ""
+                throw Error("fresh-chat preparation must clear stale per-thread overrides")
+            if requestParams["webSearch"] != false
+                throw Error("fresh-chat preparation must clear stale per-thread tools")
+        } finally {
+            newChatStartsWith := oldDefault
+            requestParams := oldParams
+        }
+    }
+
     test_applyNewChatDefault_assistant_applies() {
         global newChatStartsWith, requestParams, assistants
 

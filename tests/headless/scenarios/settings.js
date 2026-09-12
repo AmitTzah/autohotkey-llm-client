@@ -674,11 +674,13 @@ scenarios.push({
     // default to fresh (message-less, settings-less) threads.
     const loaderApplies = ipcSrc.includes('_applyNewChatDefaultToFreshThread(threadId)');
     const helperExists = settingsSrc.includes('_applyNewChatDefaultToFreshThread(threadId)');
-    // The sidebar newChat action still applies the default at creation.
-    const sidebarApplies = sidebarSrc.includes('_applyNewChatDefault()');
-    if (!trayNewChat || !loaderApplies || !helperExists || !sidebarApplies)
+    // The sidebar newChat action resolves the same fresh-chat preference at creation.
+    const freshResolverExists = settingsSrc.includes('_prepareFreshChatSettings()');
+    const sidebarApplies = sidebarSrc.includes('_prepareFreshChatSettings()');
+    if (!trayNewChat || !loaderApplies || !helperExists || !freshResolverExists || !sidebarApplies)
       throw new Error('tray new-chat default wiring missing: trayNewChat=' + trayNewChat +
-        ' loaderApplies=' + loaderApplies + ' helperExists=' + helperExists + ' sidebarApplies=' + sidebarApplies);
+        ' loaderApplies=' + loaderApplies + ' helperExists=' + helperExists +
+        ' freshResolverExists=' + freshResolverExists + ' sidebarApplies=' + sidebarApplies);
     return 'LoadThreadIntoUI applies _applyNewChatDefaultToFreshThread to fresh threads, so tray "New Chat" starts with the configured default';
   }
 });
@@ -2020,6 +2022,34 @@ scenarios.push({
     if (messages.indexOf('assistant:Hello from the mock LLM.') < 0)
       throw new Error('custom provider response was not streamed into the chat: ' + messages);
     return 'Xiaomi provider became selectable before Save, saved as xiaomi/vendor/mimo-v2.5-pro, reloaded intact, and streamed through the mock Chat Completions endpoint with Bearer auth';
+  }
+});
+
+scenarios.push({
+  id: 345,
+  name: 'Fresh chat immediately shows New Chats Start With model; persisted thread override still wins',
+  regression: true,
+  mode: null,
+  settings: { newChatStartsWith: 'openai/gpt-5-mini' },
+  fixtures: {
+    threads: [{ id: 't-model-override-345', title: 'Existing Override', active_leaf_id: 'm-model-override-345', model_override: 'deepseek/deepseek-v4-pro' }],
+    messages: [{ id: 'm-model-override-345', thread_id: 't-model-override-345', role: 'user', content: 'existing thread' }]
+  },
+  async body({ cdp, dbPath }) {
+    await showChat();
+    await cdp.waitFor('window.activeThreadId === "" && window._currentSettings && window._currentSettings.model === "openai/gpt-5-mini"', 15000, 200, 'fresh configured model');
+    let card = await cdp.eval(`(() => ({ name: document.querySelector('#modelCardTrigger .name') ? document.querySelector('#modelCardTrigger .name').textContent : '', id: document.querySelector('#modelCardTrigger .id') ? document.querySelector('#modelCardTrigger .id').textContent : '' }))()`);
+    if (card.id !== 'openai/gpt-5-mini' || card.name.indexOf('gpt-5-mini') < 0) throw new Error('fresh chat card did not show New Chats Start With model: ' + JSON.stringify(card));
+    await cdp.eval(`(() => { const item = document.querySelector('#thread-list .chat-item[data-chat="t-model-override-345"]'); if (!item) return false; item.click(); return true; })()`);
+    await cdp.waitFor('window.activeThreadId === "t-model-override-345" && window._currentSettings && window._currentSettings.model === "deepseek/deepseek-v4-pro"', 15000, 200, 'existing override loaded');
+    await cdp.click('#new-chat-btn');
+    await cdp.waitFor('window.activeThreadId && window.activeThreadId !== "t-model-override-345" && window._currentSettings && window._currentSettings.model === "openai/gpt-5-mini"', 15000, 200, 'new chat configured model');
+    const newId = await cdp.eval('window.activeThreadId');
+    const rows = seed.query(dbPath, 'SELECT model_override FROM chat_threads WHERE id = ?', [newId]);
+    if (!rows.length || rows[0].model_override !== 'openai/gpt-5-mini') throw new Error('new chat did not persist configured model: ' + JSON.stringify({ newId, rows }));
+    card = await cdp.eval(`(() => ({ name: document.querySelector('#modelCardTrigger .name') ? document.querySelector('#modelCardTrigger .name').textContent : '', id: document.querySelector('#modelCardTrigger .id') ? document.querySelector('#modelCardTrigger .id').textContent : '' }))()`);
+    if (card.id !== 'openai/gpt-5-mini') throw new Error('new chat card regressed after thread creation: ' + JSON.stringify(card));
+    return 'threadless startup and New Chat show openai/gpt-5-mini immediately; existing deepseek-v4-pro override remains authoritative';
   }
 });
 
