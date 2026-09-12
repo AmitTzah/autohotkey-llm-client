@@ -68,17 +68,22 @@ class TreeRepo {
     }
 
     static GetSiblings(msgId) {
-        table := ChatDB.db.Query("SELECT sibling_group, thread_id FROM messages WHERE id=?;", msgId)
+        table := ChatDB.db.Query("SELECT sibling_group, thread_id, parent_id, role FROM messages WHERE id=?;", msgId)
         if !table.count
             return []
         sg := table[1, "sibling_group"]
         if !sg
             return []
         tid := table[1, "thread_id"]
+        parentId := table[1, "parent_id"] ? table[1, "parent_id"] : ""
+        role := table[1, "role"]
 
-        table2 := ChatDB.db.Query("SELECT id, role, content, model, sibling_index FROM messages WHERE sibling_group=? AND thread_id=? ORDER BY sibling_index;", sg, tid)
+        table2 := ChatDB.db.Query("SELECT id, role, content, model, sibling_index, parent_id FROM messages WHERE sibling_group=? AND thread_id=? AND role=? ORDER BY sibling_index;", sg, tid, role)
         siblings := []
         for row in table2.rows {
+            rowParent := row.parent_id ? row.parent_id : ""
+            if rowParent != parentId
+                continue
             siblings.Push({
                 id: row.id, role: row.role,
                 content_preview: SubStr(row.content, 1, 80),

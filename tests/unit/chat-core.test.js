@@ -72,13 +72,21 @@ function loadModule() {
         isChatMode: false,
         isLoading: false,
         streamState: { active: false },
-        setChatButtonsEnabled: function(enabled) {
-            sandbox._lastButtonsEnabled = enabled;
-            sandbox.isLoading = !enabled;
+        _threadBusy: Object.create(null),
+        isThreadRequestInFlight: function(threadId) {
+            return !!sandbox._threadBusy[String(threadId || '')];
+        },
+        syncChatButtonsForActiveThread: function() {
+            var busy = !!sandbox._threadBusy[String(sandbox.activeThreadId || '')];
+            sandbox._lastButtonsEnabled = !busy;
+            sandbox.isLoading = busy;
             var sendBtn = sandbox.document.getElementById('chat-send-btn');
             var input = sandbox.document.getElementById('chat-input');
             if (sendBtn) sendBtn.disabled = false;
-            if (input) input.disabled = !enabled;
+            if (input) input.disabled = busy;
+        },
+        setChatButtonsEnabled: function(enabled) {
+            sandbox._lastButtonsEnabled = enabled;
         },
         activeThreadId: '',
         sessionStorage: { getItem: function() { return null; }, setItem: function() {} },
@@ -258,51 +266,52 @@ describe('initChatMode', () => {
         assert.strictEqual(sendBtn.disabled, false);
     });
 
-    it('shows loading when isLoading and last message is not assistant', () => {
+    it('shows loading when the loaded thread is busy and last message is not assistant', () => {
         const ctx = loadModule();
-        ctx.isLoading = true;
+        ctx._threadBusy['thread-a'] = true;
         let loadingShown = false;
         ctx.showLoadingIndicator = function() { loadingShown = true; };
-        ctx.initChatMode([{ role: 'user', content: 'q', id: 'u1' }]);
-        assert.ok(loadingShown, 'loading indicator should be shown');
+        ctx.initChatMode({ messages: [{ role: 'user', content: 'q', id: 'u1' }], threadId: 'thread-a' });
+        assert.ok(loadingShown, 'loading indicator should be shown for the busy loaded thread');
     });
 
-    it('hides loading when last message is assistant', () => {
+    it('hides loading when a busy loaded thread already ends with an assistant', () => {
         const ctx = loadModule();
-        ctx.isLoading = true;
+        ctx._threadBusy['thread-a'] = true;
         let loadingHidden = false;
         ctx.hideLoadingIndicator = function() { loadingHidden = true; };
-        ctx.initChatMode([{ role: 'assistant', content: 'a', id: 'a1' }]);
+        ctx.initChatMode({ messages: [{ role: 'assistant', content: 'a', id: 'a1' }], threadId: 'thread-a' });
         assert.ok(loadingHidden, 'loading indicator should be hidden');
-        // Bug #218: a request is still in flight, so the composer must stay
-        // disabled even though the visible thread ends with an assistant.
-        assert.strictEqual(ctx.isLoading, true, 'isLoading must stay true while a request is in flight');
+        assert.strictEqual(ctx.isLoading, true, 'the busy thread must still stay in Stop mode');
     });
 
-    it('keeps the composer in Stop mode when switching threads mid-stream (bug #218)', () => {
+    it('keeps chat B in Send mode while chat A is busy, then restores Stop when A is loaded', () => {
         const ctx = loadModule();
-        ctx.streamState = { active: true };
-        ctx.isLoading = false;
+        ctx._threadBusy['t-A'] = true;
         const chatInput = { disabled: false, style: {}, focus: () => {} };
         const sendBtn = { disabled: false, onclick: null };
         ctx._elementCache['chat-input'] = chatInput;
         ctx._elementCache['chat-send-btn'] = sendBtn;
-        ctx.initChatMode([{ role: 'assistant', content: 'a', id: 'a1' }]);
-        assert.strictEqual(ctx._lastButtonsEnabled, false, 'the composer must stay disabled mid-stream');
-        assert.strictEqual(chatInput.disabled, true, 'the input must stay disabled mid-stream');
-        assert.strictEqual(ctx.isLoading, true, 'isLoading must stay true mid-stream');
+
+        ctx.initChatMode({ messages: [{ role: 'assistant', content: 'b', id: 'b1' }], threadId: 't-B' });
+        assert.strictEqual(ctx._lastButtonsEnabled, true, 'idle B must remain sendable while A generates');
+        assert.strictEqual(chatInput.disabled, false);
+
+        ctx.initChatMode({ messages: [{ role: 'user', content: 'a', id: 'a1' }], threadId: 't-A' });
+        assert.strictEqual(ctx._lastButtonsEnabled, false, 'loading A again must restore Stop mode');
+        assert.strictEqual(chatInput.disabled, true);
+        assert.strictEqual(ctx.isLoading, true);
     });
 
-    it('keeps the composer disabled during the pre-stream phase (isLoading, no stream content yet)', () => {
+    it('keeps the composer disabled during this thread\'s pre-stream phase', () => {
         const ctx = loadModule();
-        ctx.streamState = { active: false };
-        ctx.isLoading = true;
+        ctx._threadBusy['t-A'] = true;
         const chatInput = { disabled: false, style: {}, focus: () => {} };
         const sendBtn = { disabled: false, onclick: null };
         ctx._elementCache['chat-input'] = chatInput;
         ctx._elementCache['chat-send-btn'] = sendBtn;
-        ctx.initChatMode([{ role: 'user', content: 'q', id: 'u1' }]);
-        assert.strictEqual(ctx._lastButtonsEnabled, false, 'an in-flight request must keep the composer disabled');
+        ctx.initChatMode({ messages: [{ role: 'user', content: 'q', id: 'u1' }], threadId: 't-A' });
+        assert.strictEqual(ctx._lastButtonsEnabled, false, 'the busy loaded thread must keep the composer disabled');
         assert.strictEqual(chatInput.disabled, true);
         assert.strictEqual(ctx.isLoading, true);
     });

@@ -1567,7 +1567,7 @@ scenarios.push({
     await cdp.click('.trash-item button.danger');
     await sleep(300);
     await cdp.waitFor('document.getElementById("customConfirmOverlay") !== null', 5000, 200, 'delete forever confirm');
-    const activeAtHardDelete = await cdp.eval('streamState.active === true');
+    const activeAtHardDelete = await cdp.eval('typeof isThreadRequestInFlight === "function" && isThreadRequestInFlight("t-hard-a-172")');
     await cdp.click('#customConfirmOverlay .yes-confirm-btn');
     await waitStreamingIdle(cdp, 30000);
     await sleep(1200);

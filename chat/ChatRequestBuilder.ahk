@@ -17,14 +17,24 @@
 ; Preflight failures happen before a request gets its own ownership record.
 ; Keep this check local to the builder because the standalone #Warn/load probe
 ; includes this file without the streaming module that defines the full helper.
-_HasActiveOperationForUi() {
-    global _activeStreams, _activeToolLoops, _activeNonStreamRequests
-    if IsSet(_activeStreams) && _activeStreams.Length
-        return true
-    if IsSet(_activeToolLoops) && _activeToolLoops.Length
-        return true
-    if IsSet(_activeNonStreamRequests) && _activeNonStreamRequests.Length
-        return true
+_HasActiveOperationForUi(threadId := "") {
+    global _activeStreams, _activeToolLoops, _activeNonStreamRequests, activeThreadId
+    if !threadId && IsSet(activeThreadId)
+        threadId := activeThreadId
+    if !threadId
+        return false
+    if IsSet(_activeStreams)
+        for stream in _activeStreams
+            if stream.threadId = threadId
+                return true
+    if IsSet(_activeToolLoops)
+        for loopState in _activeToolLoops
+            if loopState.threadId = threadId
+                return true
+    if IsSet(_activeNonStreamRequests)
+        for scope in _activeNonStreamRequests
+            if scope.threadId = threadId
+                return true
     return false
 }
 
@@ -32,8 +42,9 @@ buildRequest(requestPath := "") {
     if !activeThreadId {
         return ""
     }
-    if !IsObject(requestPath) && requestParams.Has("_requestPath")
-        requestPath := requestParams["_requestPath"]
+    ; Only an explicitly supplied path may override the active thread's DB path.
+    ; requestParams is a shared stream-processing window and may currently hold
+    ; another thread's _requestPath while that background stream is polled.
     path := IsObject(requestPath) ? requestPath : ChatDB.Msg_GetActivePath(activeThreadId)
     if !path.Length {
         return ""
@@ -479,8 +490,43 @@ _RestoreFailedRetryLeaf() {
     _ClearRetryRollbackState()
 }
 
+; Retry metadata lives in the shared requestParams window while legacy
+; stream handlers run. A background retry may therefore be the last request
+; loaded into that window when the user sends normally from another thread.
+; Only metadata explicitly owned by the active thread may participate in a
+; new dispatch; everything else is stale foreign state.
+_SanitizeRetryStateForDispatch() {
+    global requestParams, activeThreadId
+    retryKeys := [
+        "pendingRetryThreadId",
+        "pendingRetryOriginalLeaf",
+        "pendingRetryRewoundLeaf",
+        "pendingRetrySiblingGroup",
+        "pendingRetryIsRoot"
+    ]
+    hasRetryState := false
+    for key in retryKeys {
+        if requestParams.Has(key) {
+            hasRetryState := true
+            break
+        }
+    }
+    if !hasRetryState
+        return
+
+    ownerThreadId := requestParams.Has("pendingRetryThreadId") ? requestParams["pendingRetryThreadId"] : ""
+    if ownerThreadId != "" && ownerThreadId = activeThreadId
+        return
+
+    for key in retryKeys {
+        if requestParams.Has(key)
+            requestParams.Delete(key)
+    }
+}
+
 ; Build request, fire to LLM, handle errors. Replaces 5 duplicate call sites.
-_BuildAndFireRequest() {
+_BuildAndFireRequest(requestPath := "") {
+    _SanitizeRetryStateForDispatch()
     try {
     ; Streaming requests are built through the shared requestParams window.
     ; Another active stream's poll timer also swaps that window to its own
@@ -490,9 +536,13 @@ _BuildAndFireRequest() {
     criticalDispatch := requestParams.Has("stream") && requestParams["stream"]
     if criticalDispatch
         Critical "On"
+    ; Capture request ownership once, before any stream record is created.
+    ; Ordinary sends always use the active thread's current DB path; scoped
+    ; tool-loop continuations pass their owned path explicitly.
+    ownedRequestPath := IsObject(requestPath) ? requestPath.Clone() : ChatDB.Msg_GetActivePath(activeThreadId).Clone()
     if requestParams.Has("_latencyTraceId")
         debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.buildRequest.begin", "Latency")
-    chatHistoryJSONRequest := buildRequest()
+    chatHistoryJSONRequest := buildRequest(ownedRequestPath)
     if requestParams.Has("_latencyTraceId")
         debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.buildRequest.returned", "Latency")
     if !chatHistoryJSONRequest {
@@ -519,6 +569,10 @@ _BuildAndFireRequest() {
     startLoadingCursor(true)
     if requestParams.Has("_latencyTraceId")
         debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.sendRequestToLLM.begin", "Latency")
+    ; The stream record is built synchronously inside sendRequestToLLM and
+    ; reads _requestPath from the shared window. Replace any background stream
+    ; path with this request's captured owner immediately before dispatch.
+    requestParams["_requestPath"] := ownedRequestPath.Clone()
     sendRequestToLLM(&chatHistoryJSONRequest)
     if requestParams.Has("_latencyTraceId")
         debugLog("[LATENCY][" requestParams["_latencyTraceId"] "] +" (A_TickCount - requestParams["_latencyTraceStartTick"]) "ms ahk.sendRequestToLLM.returned", "Latency")

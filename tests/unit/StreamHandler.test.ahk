@@ -176,6 +176,50 @@ class StreamHandlerTest {
         this._teardownDb()
     }
 
+    PersistStreamResponse_RejectsMismatchedRetrySiblingGroup() {
+        global activeThreadId, requestParams
+        this._setupDb()
+        threadId := ChatDB.Thread_Create("Retry Metadata Isolation")
+        u1 := ChatDB.Msg_Insert({thread_id: threadId, role: "user", content: "first question"})
+        a1 := ChatDB.Msg_Insert({
+            thread_id: threadId, role: "assistant", content: "first answer",
+            parent_id: u1, model: "deepseek/deepseek-v4-flash",
+            sibling_group: "sg-stale", sibling_index: 0
+        })
+        u2 := ChatDB.Msg_Insert({thread_id: threadId, role: "user", content: "normal follow-up", parent_id: a1})
+
+        activeThreadId := threadId
+        requestParams["_streamThreadId"] := threadId
+        requestParams["_streamParentId"] := u2
+        requestParams["_requestPath"] := ChatDB.Msg_GetPathToLeaf(threadId, u2)
+        requestParams["pendingRetrySiblingGroup"] := "sg-stale"
+
+        _persistStreamResponse(
+            "ordinary response",
+            "deepseek/deepseek-v4-flash",
+            "",
+            { promptTokens: 12, completionTokens: 9, cachedTokens: 0 },
+            500,
+            100,
+            threadId
+        )
+
+        row := ChatDB.db.Query("SELECT parent_id, sibling_group FROM messages WHERE thread_id=? AND content='ordinary response';", threadId)
+        if !row.count
+            throw Error("ordinary response was not persisted")
+        if row[1, "parent_id"] != u2
+            throw Error("ordinary response parent changed while rejecting stale retry metadata")
+        if row[1, "sibling_group"]
+            throw Error("ordinary response inherited stale retry sibling group: " row[1, "sibling_group"])
+
+        activeThreadId := ""
+        for key in ["_streamThreadId", "_streamParentId", "_requestPath", "pendingRetrySiblingGroup"] {
+            if requestParams.Has(key)
+                requestParams.Delete(key)
+        }
+        this._teardownDb()
+    }
+
     ; Regression (bug #197): the response must be parented to the message that
     ; SENT the request (_streamParentId captured at send time), NOT to the
     ; currently-active leaf after a same-thread branch switch mid-stream.
@@ -525,6 +569,26 @@ class StreamHandlerTest {
             throw Error("Expected empty errMsg after parse failure, got '" errMsg "'")
     }
 
+    ; Regression: non-stream/Codex responses are parsed before entering the
+    ; shared completion path. Their synthetic JSON output must never be reread
+    ; as SSE because assistant text can legitimately contain `data: ` markers.
+    NonStreamFinalize_SkipsSyntheticOutputSseRead() {
+        srcPath := A_ScriptDir "\\..\\chat\\streaming\\StreamHandler.ahk"
+        src := FileRead(srcPath)
+        processPos := InStr(src, "_ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {")
+        finalizePos := InStr(src, "_finalizeStreaming() {")
+        if !processPos || !finalizePos
+            throw Error("non-stream/finalize helpers not found")
+        processBlock := SubStr(src, processPos, 5200)
+        if !InStr(processBlock, 'requestParams["_streamOutputAlreadyParsed"] := true') || !InStr(processBlock, "_finalizeStreaming()")
+            throw Error("non-stream response must mark its output parsed before shared finalization")
+        finalizeBlock := SubStr(src, finalizePos, 700)
+        guardPos := InStr(finalizeBlock, '_streamOutputAlreadyParsed')
+        readPos := InStr(finalizeBlock, "_readStreamChunkFromParams()")
+        if !guardPos || !readPos || guardPos > readPos
+            throw Error("_finalizeStreaming must guard the SSE read for already-parsed non-stream output")
+    }
+
     ; Regression (bug #56): a user-initiated Stop before the first token must
     ; finalize as a clean cancellation. _finalizeStreaming must check
     ; _streamCancelled BEFORE the empty-content branch (which routes to
@@ -537,7 +601,7 @@ class StreamHandlerTest {
             throw Error("_finalizeStreaming not found in StreamHandler.ahk")
         ; The window is generous because the bug #219 mid-stream-error branch
         ; sits between the cancel branch and the empty-content branch.
-        block := SubStr(src, finalizePos, 2200)
+        block := SubStr(src, finalizePos, 3000)
         cancelPos := InStr(block, "_handleStreamCancelled()")
         errorPos := InStr(block, "_handleStreamError()")
         if !cancelPos || !errorPos || cancelPos > errorPos
@@ -622,7 +686,7 @@ class StreamHandlerTest {
     BuildAndFireRequest_BuildFailureClearsPendingRetry() {
         srcPath := A_ScriptDir "\..\chat\ChatRequestBuilder.ahk"
         src := FileRead(srcPath)
-        fnPos := InStr(src, "_BuildAndFireRequest() {")
+        fnPos := InStr(src, "_BuildAndFireRequest(")
         if !fnPos
             throw Error("_BuildAndFireRequest not found in ChatRequestBuilder.ahk")
         block := SubStr(src, fnPos, 2400)
@@ -672,7 +736,7 @@ class StreamHandlerTest {
         finalizePos := InStr(src, "_finalizeStreaming() {")
         if !finalizePos
             throw Error("_finalizeStreaming not found in StreamHandler.ahk")
-        block := SubStr(src, finalizePos, 2200)
+        block := SubStr(src, finalizePos, 3000)
         errorPos := InStr(block, "_handleMidStreamError()")
         emptyPos := InStr(block, "_handleStreamError()")
         cancelPos := InStr(block, "_handleStreamCancelled()")
@@ -763,6 +827,35 @@ class StreamHandlerTest {
             _activeToolLoops := []
             if _HasOtherActiveOperations("", current)
                 throw Error("the finishing stream must be idle when it is the only operation")
+        } finally {
+            _activeStreams := oldStreams
+            _activeToolLoops := oldLoops
+            _activeNonStreamRequests := oldRequests
+        }
+    }
+
+    ; Different conversations are independent: another thread's active
+    ; operation must not keep this thread's composer in Stop mode.
+    ThreadScopedActiveOperations_IgnoreOtherThreads() {
+        global _activeStreams, _activeToolLoops, _activeNonStreamRequests
+        oldStreams := _activeStreams
+        oldLoops := _activeToolLoops
+        oldRequests := _activeNonStreamRequests
+        try {
+            currentA := {key: "stream-a", threadId: "t-a"}
+            _activeStreams := [currentA, {key: "stream-b", threadId: "t-b"}]
+            _activeToolLoops := []
+            _activeNonStreamRequests := []
+
+            if _HasOtherActiveOperationsForThread("t-a", "", currentA)
+                throw Error("thread B must not keep thread A's composer busy")
+
+            _activeNonStreamRequests := [{key: "request-a", threadId: "t-a"}]
+            if !_HasOtherActiveOperationsForThread("t-a", "", currentA)
+                throw Error("another operation in thread A must keep thread A busy")
+
+            if !_HasOtherActiveOperationsForThread("t-b")
+                throw Error("thread B's own stream must be reported as busy")
         } finally {
             _activeStreams := oldStreams
             _activeToolLoops := oldLoops
@@ -863,6 +956,131 @@ class StreamHandlerTest {
         } finally {
             _activeStreams := oldStreams
         }
+    }
+
+    ; Terminal tool-loop cleanup must scrub only the failed owner's shared
+    ; runtime state. A concurrent stream must remain registered and become the
+    ; restored current stream; with no other stream, no stale tool/search state
+    ; may survive for a later request to clone.
+    ToolLoopFinish_ClearsOwnedRuntimeAndPreservesForeignStream() {
+        global requestParams, _activeStreams, _activeToolLoops, _currentStreamKey
+        oldParams := requestParams
+        oldStreams := _activeStreams
+        oldLoops := _activeToolLoops
+        oldKey := _currentStreamKey
+        try {
+            requestParams := Map(
+                "_streamToolCalls", Map("stale", {name: "web_search"}),
+                "_streamToolLoopCount", 60,
+                "_pendingToolMessages", [{role: "tool"}],
+                "_pendingSearchContextIds", ["ctx-a"],
+                "_toolLoopCount", 60,
+                "_requestPath", [{id: "leaf-a"}]
+            )
+            streamA := {
+                key: "cleanup-a", threadId: "t-a",
+                requestParamsSnapshot: Map(
+                    "_pendingToolMessages", [{role: "tool"}],
+                    "_pendingSearchContextIds", ["ctx-a"],
+                    "_toolLoopCount", 60
+                )
+            }
+            streamB := {
+                key: "cleanup-b", requestParamsSnapshot: Map(), requestPath: [{id: "leaf-b"}],
+                outputFile: "", lastPos: 0, content: "b-partial", reasoning: "", modelName: "m",
+                displayName: "M", firstTokenTime: 0, usage: {}, providerKey: "openai",
+                rawSseChunks: "", rawLastResponse: "", pendingLine: "", errorMessage: "", pollCount: 0,
+                requestStartTime: 0, chatHistoryJSONRequest: "{}", pid: 0, cancelled: false,
+                toolCalls: Map(), toolLoopCount: 0, threadId: "t-b", parentId: "leaf-b",
+                logWindowTitle: "", logProviderName: "", logModel: "m", logPasteMode: "chat",
+                retryIsRoot: false, retrySiblingGroup: "", requestFile: "", cURLCommandFile: "", errorFile: ""
+            }
+            loopA := {key: "loop-a", threadId: "t-a", params: requestParams.Clone()}
+            _activeStreams := [streamA, streamB]
+            _activeToolLoops := [loopA]
+            _currentStreamKey := streamA.key
+
+            _FinishToolLoop(loopA, streamA)
+            SetTimer(_pollStreamTimer, 0)
+
+            if _activeStreams.Length != 1 || _activeStreams[1].key != "cleanup-b"
+                throw Error("terminal cleanup removed or orphaned the foreign stream")
+            if _activeToolLoops.Length
+                throw Error("terminal cleanup left an orphan tool-loop record")
+            if _currentStreamKey != "cleanup-b" || requestParams["_streamThreadId"] != "t-b"
+                throw Error("foreign stream was not restored after owned loop cleanup")
+            for key in ["_pendingToolMessages", "_pendingSearchContextIds", "_toolLoopCount"] {
+                if loopA.params.Has(key) || streamA.requestParamsSnapshot.Has(key) || requestParams.Has(key)
+                    throw Error("owned staged tool state survived cleanup: " key)
+            }
+
+            requestParams := Map(
+                "_streamToolCalls", Map("stale", {name: "web_search"}),
+                "_streamToolLoopCount", 60,
+                "_pendingToolMessages", [{role: "tool"}],
+                "_pendingSearchContextIds", ["ctx-only"],
+                "_toolLoopCount", 60,
+                "_requestPath", [{id: "leaf-only"}]
+            )
+            streamOnly := {
+                key: "cleanup-only", threadId: "t-only",
+                requestParamsSnapshot: Map(
+                    "_pendingToolMessages", [{role: "tool"}],
+                    "_pendingSearchContextIds", ["ctx-only"],
+                    "_toolLoopCount", 60
+                )
+            }
+            loopOnly := {key: "loop-only", threadId: "t-only", params: requestParams.Clone()}
+            _activeStreams := [streamOnly]
+            _activeToolLoops := [loopOnly]
+            _currentStreamKey := streamOnly.key
+
+            _FinishToolLoop(loopOnly, streamOnly)
+
+            if _activeStreams.Length || _activeToolLoops.Length || _currentStreamKey != ""
+                throw Error("terminal cleanup left active ownership records")
+            for key in ["_streamToolCalls", "_streamToolLoopCount", "_pendingToolMessages",
+                        "_pendingSearchContextIds", "_toolLoopCount", "_requestPath"] {
+                if requestParams.Has(key)
+                    throw Error("terminal cleanup leaked request state: " key)
+            }
+        } finally {
+            SetTimer(_pollStreamTimer, 0)
+            requestParams := oldParams
+            _activeStreams := oldStreams
+            _activeToolLoops := oldLoops
+            _currentStreamKey := oldKey
+        }
+    }
+
+    CodexActivity_IsScopedAndRepostedByOriginatingPath() {
+        srcPath := A_ScriptDir "\..\chat\streaming\StreamHandler.ahk"
+        src := FileRead(srcPath)
+        if !InStr(src, "_NonStreamScopeBelongsToCurrentPath(scope)")
+            throw Error("Codex activity lacks a same-thread path ownership gate")
+        beginPos := InStr(src, "_BeginCodexActivity(scope, providerInfo)")
+        postPos := InStr(src, "_PostCodexActivity(scope, providerInfo, progress)")
+        repostPos := InStr(src, "_RepostActiveStreamForThread(threadId)")
+        if !beginPos || !postPos || !repostPos
+            throw Error("Codex activity/repost helpers are missing")
+        beginBlock := SubStr(src, beginPos, postPos - beginPos)
+        postBlock := SubStr(src, postPos, 2200)
+        repostBlock := SubStr(src, repostPos, 2600)
+        if !InStr(beginBlock, "_NonStreamScopeBelongsToCurrentPath(scope)") ||
+            !InStr(postBlock, "_NonStreamScopeBelongsToCurrentPath(scope)")
+            throw Error("live Codex activity can paint into a sibling branch")
+        if !InStr(repostBlock, "_FindNonStreamRequestForThread(threadId)") ||
+            !InStr(repostBlock, "activityProgress")
+            throw Error("returning to the originating Codex branch cannot restore live activity")
+    }
+
+    CodexActivity_BranchSwitchTriggersPathRepost() {
+        branchPath := A_ScriptDir "\..\chat\callbacks\Branch.ahk"
+        branchSrc := FileRead(branchPath)
+        switchPos := InStr(branchSrc, "handleBranchSwitch(params, *)")
+        repostPos := InStr(branchSrc, "_RepostActiveStreamForThread(activeThreadId)", false, switchPos)
+        if !switchPos || !repostPos
+            throw Error("branch navigation must repost the in-flight request for the newly selected path")
     }
 
     ; Regression (bug #221): the poll timer must iterate EVERY in-flight

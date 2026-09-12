@@ -130,6 +130,15 @@ class SearchToolExecutorTest {
             throw Error("request path was not carried with the loop state")
     }
 
+    MaxIterationsReached_UsesBoundedSixtyRoundCeiling() {
+        if SearchTools.MAX_TOOL_ITERATIONS != 60
+            throw Error("expected bounded web-search ceiling of 60, got " SearchTools.MAX_TOOL_ITERATIONS)
+        if SearchToolExecutor.MaxIterationsReached(60)
+            throw Error("round 60 must still be allowed")
+        if !SearchToolExecutor.MaxIterationsReached(61)
+            throw Error("round 61 must terminate the tool loop")
+    }
+
     QueueFollowUp_InsertsContextAndStagesMessages() {
         global requestParams, activeThreadId
         this._setupDb()

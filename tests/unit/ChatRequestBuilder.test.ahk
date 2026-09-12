@@ -37,10 +37,10 @@ class ChatRequestBuilderTest {
 
         ; Ensure API keys are set for the test (buildRequest validates).
         ; EnvSet is process-scoped — no cleanup needed between tests.
-        EnvSet("DEEPSEEK_API_KEY", "sk-test-deepseek-key")
-        EnvSet("OPENAI_API_KEY", "sk-test-openai-key")
-        EnvSet("GOOGLE_API_KEY", "sk-test-gemini-key")
-        EnvSet("OPENROUTER_API_KEY", "sk-test-openrouter-key")
+        EnvSet("DEEPSEEK_API_KEY", "[REDACTED_SECRET]")
+        EnvSet("OPENAI_API_KEY", "[REDACTED_SECRET]")
+        EnvSet("GOOGLE_API_KEY", "[REDACTED_SECRET]")
+        EnvSet("OPENROUTER_API_KEY", "[REDACTED_SECRET]")
 
         this._setupDb()
 
@@ -95,6 +95,94 @@ class ChatRequestBuilderTest {
             try FileDelete(requestParams["cURLErrorFile"])
 
         return result
+    }
+
+    OrdinaryBuild_IgnoresStaleSharedRequestPath() {
+        global activeThreadId, requestParams
+
+        EnvSet("DEEPSEEK_API_KEY", "[REDACTED_SECRET]")
+        this._setupDb()
+        try {
+            threadA := ChatDB.Thread_Create("Thread A")
+            ChatDB.Msg_Insert({
+                thread_id: threadA, role: "user", content: "message from thread A",
+                parent_id: "", sibling_group: "", sibling_index: 0
+            })
+            pathA := ChatDB.Msg_GetActivePath(threadA)
+
+            threadB := ChatDB.Thread_Create("Thread B")
+            ChatDB.Msg_Insert({
+                thread_id: threadB, role: "user", content: "message from thread B",
+                parent_id: "", sibling_group: "", sibling_index: 0
+            })
+            activeThreadId := threadB
+
+            ; Simulate a background poll that left thread A's owned path in the
+            ; shared requestParams window just before the user sends in B.
+            requestParams := Map(
+                "singleAPIModelName", "deepseek/deepseek-v4-flash",
+                "stream", true,
+                "pasteMode", "chat",
+                "windowTitle", "test",
+                "providerName", "deepseek",
+                "uniqueID", A_TickCount,
+                "_requestPath", pathA.Clone()
+            )
+
+            payloadB := buildRequest()
+            parsedB := jsongo.Parse(payloadB)
+            messagesB := jsongo.Stringify(parsedB["messages"])
+            if !InStr(messagesB, "message from thread B") || InStr(messagesB, "message from thread A")
+                throw Error("ordinary build leaked stale thread A _requestPath into B: " messagesB)
+
+            ; Explicit scoped paths remain supported for tool-loop continuations.
+            payloadA := buildRequest(pathA)
+            parsedA := jsongo.Parse(payloadA)
+            messagesA := jsongo.Stringify(parsedA["messages"])
+            if !InStr(messagesA, "message from thread A") || InStr(messagesA, "message from thread B")
+                throw Error("explicit request path was not honored: " messagesA)
+        } finally {
+            for key in ["chatHistoryJSONRequestFile", "cURLCommandFile", "cURLOutputFile", "cURLErrorFile"] {
+                if IsSet(requestParams) && requestParams.Has(key)
+                    try FileDelete(requestParams[key])
+            }
+            this._teardownDb()
+        }
+    }
+
+    RetryState_ForeignOwnerIsClearedBeforeDispatch() {
+        global activeThreadId, requestParams
+        oldThreadId := activeThreadId
+        oldParams := requestParams
+        try {
+            activeThreadId := "thread-B"
+            requestParams := Map(
+                "pendingRetryThreadId", "thread-A",
+                "pendingRetryOriginalLeaf", "a-old",
+                "pendingRetryRewoundLeaf", "a-parent",
+                "pendingRetrySiblingGroup", "sg-A",
+                "pendingRetryIsRoot", true
+            )
+
+            _SanitizeRetryStateForDispatch()
+            for key in ["pendingRetryThreadId", "pendingRetryOriginalLeaf", "pendingRetryRewoundLeaf", "pendingRetrySiblingGroup", "pendingRetryIsRoot"] {
+                if requestParams.Has(key)
+                    throw Error("foreign retry state leaked into thread B dispatch: " key)
+            }
+
+            ; Legitimate retry metadata owned by B must remain intact.
+            requestParams["pendingRetryThreadId"] := "thread-B"
+            requestParams["pendingRetrySiblingGroup"] := "sg-B"
+            requestParams["pendingRetryOriginalLeaf"] := "b-old"
+            _SanitizeRetryStateForDispatch()
+            if !requestParams.Has("pendingRetrySiblingGroup") || requestParams["pendingRetrySiblingGroup"] != "sg-B"
+                throw Error("owned retry sibling group was incorrectly cleared")
+            if !requestParams.Has("pendingRetryOriginalLeaf") || requestParams["pendingRetryOriginalLeaf"] != "b-old"
+                throw Error("owned retry rollback state was incorrectly cleared")
+        } finally {
+            activeThreadId := oldThreadId
+            requestParams := oldParams
+        }
     }
 
     OpenRouterFree_ChatRequestKeepsRouterModelId() {
@@ -175,7 +263,7 @@ class ChatRequestBuilderTest {
         this._setupDb()
         oldParams := requestParams
         requestParams := Map("stream", true)
-        providerInfo := { endpoint: "https://api.test/chat", apiKey: "test-key", providerKey: "openai", transport: "http" }
+        providerInfo := { endpoint: "https://api.test/chat", apiKey: "[REDACTED_SECRET]", providerKey: "openai", transport: "http" }
         requestObj := { model: "openai/gpt-5-mini", messages: [] }
         try {
             firstId := ChatDB._UUID()
@@ -268,7 +356,7 @@ class ChatRequestBuilderTest {
     PendingToolMessages_AreAppendedToRequest() {
         global activeThreadId, requestParams
 
-        EnvSet("OPENAI_API_KEY", "sk-test-openai-key")
+        EnvSet("OPENAI_API_KEY", "[REDACTED_SECRET]")
         this._setupDb()
         ChatDB.Thread_Create("Tool Loop")
         threads := ChatDB.Thread_List()
@@ -338,7 +426,7 @@ class ChatRequestBuilderTest {
     PendingToolMessages_ExcludeSearchContext_ThenReenterAfterLoop() {
         global activeThreadId, requestParams
 
-        EnvSet("OPENAI_API_KEY", "sk-test-openai-key")
+        EnvSet("OPENAI_API_KEY", "[REDACTED_SECRET]")
         this._setupDb()
         ChatDB.Thread_Create("Canonical Tool Loop")
         threads := ChatDB.Thread_List()
@@ -675,7 +763,7 @@ class ChatRequestBuilderTest {
     FollowUpRequest_KeepsEarlierImageContext() {
         global activeThreadId, requestParams
 
-        EnvSet("OPENAI_API_KEY", "sk-test-openai-key")
+        EnvSet("OPENAI_API_KEY", "[REDACTED_SECRET]")
 
         this._setupDb()
         ChatDB.Thread_Create("Vision Follow-up")

@@ -43,8 +43,17 @@ _RequestParamsAreDefault() {
 
 postWebMessage(target, data := unset, reqId := "") {
     global responseWindow
+    global activeThreadId
     if !IsSet(responseWindow) || !responseWindow {
         return
+    }
+
+    ; Composer state is thread-scoped. Most legacy callers still pass a
+    ; boolean; wrap it here with the request owner so background generations
+    ; cannot toggle the visible chat's Send/Stop button.
+    if target = "setChatButtonsEnabled" && IsSet(data) && !IsObject(data) {
+        ownerThreadId := IsSet(activeThreadId) ? activeThreadId : ""
+        data := { enabled: data ? true : false, threadId: ownerThreadId }
     }
 
     msgObj := { target: target }

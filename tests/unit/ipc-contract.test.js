@@ -37,9 +37,8 @@ describe('ipc-contract validate', () => {
     assert.deepStrictEqual(contract.validate('threadLocked', { threadId: 't1', salt: 'ab', iterations: 1000 }, 'ahk->web'), []);
     assert.deepStrictEqual(contract.validate('threadLockInfo', { threadId: 't1' }, 'ahk->web'), []);
     assert.deepStrictEqual(contract.validate('streamDone', { model: 'm', displayName: '', dbMsg: '', userTokenCount: 0, threadId: 't1' }, 'ahk->web'), []);
-    assert.deepStrictEqual(contract.validate('setChatButtonsEnabled', true, 'ahk->web'), []);
-    assert.deepStrictEqual(contract.validate('setChatButtonsEnabled', 1, 'ahk->web'), []);
-    assert.deepStrictEqual(contract.validate('setChatButtonsEnabled', 0, 'ahk->web'), []);
+    assert.deepStrictEqual(contract.validate('setChatButtonsEnabled', { enabled: true, threadId: 't1' }, 'ahk->web'), []);
+    assert.deepStrictEqual(contract.validate('setChatButtonsEnabled', { enabled: false, threadId: 't2' }, 'ahk->web'), []);
     assert.deepStrictEqual(contract.validate('trashList', [], 'ahk->web'), []);
     assert.deepStrictEqual(contract.validate('assistantList', [], 'ahk->web'), []);
     assert.deepStrictEqual(contract.validate('streamReasoning', { content: 'thinking', collapsed: 0 }, 'ahk->web'), []);
@@ -48,6 +47,7 @@ describe('ipc-contract validate', () => {
     assert.deepStrictEqual(contract.validate('requestSystemMessageFiles', {}, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('openSystemMessagesFolder', {}, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('openExternalUrl', { url: 'https://example.com' }, 'web->ahk'), []);
+    assert.deepStrictEqual(contract.validate('cancelStream', { threadId: 't1' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('unlockThread', { threadId: 't1', passwordHash: 'h' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('setThreadLock', { threadId: 't1', mode: 'set', passwordHash: 'h', salt: 's', iterations: 1000, currentPasswordHash: '' }, 'web->ahk'), []);
     assert.deepStrictEqual(contract.validate('lockChatNow', { threadId: 't1' }, 'web->ahk'), []);
@@ -97,9 +97,9 @@ describe('ipc-contract validate', () => {
     assert.ok(problems.some((p) => p.indexOf('payload should be array') >= 0));
   });
 
-  it('rejects numeric values other than 0/1 for boolean payloads', () => {
-    const problems = contract.validate('setChatButtonsEnabled', 2, 'ahk->web');
-    assert.ok(problems.some((p) => p.indexOf('payload should be boolean') >= 0));
+  it('requires enabled in thread-scoped composer-state payloads', () => {
+    const problems = contract.validate('setChatButtonsEnabled', { threadId: 't1' }, 'ahk->web');
+    assert.ok(problems.some((p) => p.indexOf('missing required field "enabled"') >= 0));
   });
 
   it('flags wrong scalar payload types', () => {

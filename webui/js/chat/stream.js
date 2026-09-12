@@ -1,6 +1,7 @@
 // Streaming response state
 var streamState = {
   active: false,
+  threadId: '',
   finalized: false, // a stream finalize (done/cancel) happened; cleared when a new stream starts
   bubble: null,
   contentDiv: null,
@@ -29,7 +30,11 @@ function scrollToBottom() {
 }
 
 // Start streaming - called automatically when first stream content/reasoning arrives
-function startStreaming() {
+function startStreaming(threadId) {
+  streamState.threadId = threadId || (typeof activeThreadId !== 'undefined' ? activeThreadId : '');
+  if (typeof setChatButtonsEnabled === 'function') {
+    setChatButtonsEnabled({ enabled: false, threadId: streamState.threadId });
+  }
   streamState.thinkingKind = 'reasoning';
   streamState.thinkingSummary = '';
   streamState.activitySearchCount = 0;
@@ -65,7 +70,7 @@ function onStreamContent(text, threadId) {
       scrollToBottom();
       return;
     }
-    startStreaming();
+    startStreaming(threadId);
   }
 
   streamState.contentBuffer += text;
@@ -87,16 +92,33 @@ function onStreamContent(text, threadId) {
   scrollToBottom();
 }
 
+// Branch replacement removes the transient stream bubble from the DOM but
+// intentionally leaves request busy state intact. An explicit AHK repost for
+// the originating path must rebuild those detached DOM references before
+// applying the full snapshot.
+function _resetDetachedStreamDomForRepost(data) {
+  if (!data || !data.repost) return;
+  var bubbleDetached = !!streamState.bubble && streamState.bubble.isConnected === false;
+  var thinkingDetached = !!streamState.thinkingDetails && streamState.thinkingDetails.isConnected === false;
+  if (!bubbleDetached && !thinkingDetached) return;
+  streamState.bubble = null;
+  streamState.contentDiv = null;
+  streamState.thinkingDetails = null;
+  streamState.contentBuffer = '';
+  streamState.thinkingBuffer = '';
+}
+
 // Called when reasoning/thinking content arrives.
 // Accepts either a string (legacy) or {content, collapsed} object.
 function onStreamReasoning(data, threadId) {
   if (threadId && activeThreadId && threadId !== activeThreadId) return;
+  _resetDetachedStreamDomForRepost(data);
   if (!streamState.active) {
     // A terminal streamCancelled/streamDone already finalized this request.
     // Any reasoning event that arrives afterwards is stale buffered SSE from
     // the cancelled request; never let it start a second assistant bubble.
     if (streamState.finalized) return;
-    startStreaming();
+    startStreaming(threadId);
   }
 
   var text = typeof data === 'string' ? data : (data.content || '');
@@ -196,6 +218,7 @@ function _streamBelongsToCurrentPath(dbMsg) {
 
 // Called when streaming is complete
 function onStreamDone(data) {
+  var completedThreadId = (data && data.threadId) ? data.threadId : (typeof activeThreadId !== 'undefined' ? activeThreadId : '');
   if (typeof _latencyMark === 'function') _latencyMark('web.stream-done-received');
   var modelName = typeof data === 'string' ? data : (data && data.model ? data.model : '');
   var displayName = (data && data.displayName) ? data.displayName : modelName;
@@ -263,19 +286,21 @@ function onStreamDone(data) {
 
   if (isCurrent) _updateUserTokenCount(data);
 
-  // The retry succeeded - the streamed response replaced the removed
-  // messages, so never restore them on a later error.
-  if (typeof _retryRemovedMessages !== 'undefined') _retryRemovedMessages = null;
-  if (typeof _retryThreadId !== 'undefined') _retryThreadId = null;
-  if (typeof _retryAnchorId !== 'undefined') _retryAnchorId = null;
+  // A retry's rollback state belongs to its originating thread. A background
+  // completion in chat A must not discard chat B's retry recovery state.
+  if (typeof _retryThreadId === 'undefined' || !_retryThreadId || _retryThreadId === completedThreadId) {
+    if (typeof _retryRemovedMessages !== 'undefined') _retryRemovedMessages = null;
+    if (typeof _retryThreadId !== 'undefined') _retryThreadId = null;
+    if (typeof _retryAnchorId !== 'undefined') _retryAnchorId = null;
+  }
 
-  // A non-current stream completion must not clear another thread's stream state.
-  // The current thread may still have its own stream in flight; the host posts
-  // setChatButtonsEnabled(true) only once no request remains, and that
-  // (handled in setChatButtonsEnabled) is the signal to reset the composer.
+  // Terminal stream messages finalize content only. AHK separately posts a
+  // thread-scoped setChatButtonsEnabled after confirming this thread has no
+  // other active operation.
   if (!isCurrent) return;
 
   streamState.active = false;
+  streamState.threadId = '';
   streamState.finalized = true;
   streamState.contentBuffer = '';
   streamState.thinkingBuffer = '';
@@ -447,6 +472,9 @@ function handleStreamMessage(target, data) {
 
 // Update the streaming bubble's author to the actual model name as soon as it's known
 function onStreamModelName(modelName, threadId, provider) {
+  if (threadId && typeof setChatButtonsEnabled === 'function') {
+    setChatButtonsEnabled({ enabled: false, threadId: threadId });
+  }
   if (typeof _latencyMark === 'function') _latencyMark('web.stream-model-name-received', 'provider=' + (provider || ''));
   if (threadId && activeThreadId && threadId !== activeThreadId) return;
   if (!modelName) return;
@@ -466,12 +494,15 @@ function onStreamModelName(modelName, threadId, provider) {
 // Clean up after user cancellation (Esc or Stop button).
 // data may be {dbMsg: {...}} with DB message info for action buttons.
 function cancelStreaming(data) {
+  var cancelledThreadId = (data && data.threadId) ? data.threadId : (typeof activeThreadId !== 'undefined' ? activeThreadId : '');
   if (!streamState.active) return;
-  // A cancelled retry keeps its partial response; the removed messages must
-  // not be restored afterwards.
-  if (typeof _retryRemovedMessages !== 'undefined') _retryRemovedMessages = null;
-  if (typeof _retryThreadId !== 'undefined') _retryThreadId = null;
-  if (typeof _retryAnchorId !== 'undefined') _retryAnchorId = null;
+  // A cancelled retry keeps its partial response. Clear recovery state only
+  // when this cancellation belongs to that retry's thread.
+  if (typeof _retryThreadId === 'undefined' || !_retryThreadId || _retryThreadId === cancelledThreadId) {
+    if (typeof _retryRemovedMessages !== 'undefined') _retryRemovedMessages = null;
+    if (typeof _retryThreadId !== 'undefined') _retryThreadId = null;
+    if (typeof _retryAnchorId !== 'undefined') _retryAnchorId = null;
+  }
 
   var dbMsg = (data && data.dbMsg) ? data.dbMsg : null;
   var isCurrent = (!dbMsg || _streamBelongsToCurrentPath(dbMsg)) &&
@@ -514,8 +545,8 @@ function cancelStreaming(data) {
     }
   }
 
-  // The host re-enables the composer only when no request remains in flight.
-  // calling it here could enable the composer while another stream runs.
+  // AHK re-enables this thread's composer only after confirming no other
+  // operation remains in this same thread.
   streamState.contentBuffer = '';
   streamState.thinkingBuffer = '';
   streamState.bubble = null;

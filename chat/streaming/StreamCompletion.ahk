@@ -5,6 +5,28 @@
 ; API logging, title generation trigger, provider lookup.
 ; ----------------------------------------------------
 
+; A retry sibling group is valid only when it already contains messages
+; from the same thread, role, and parent. This is a persistence boundary
+; invariant: stale/cross-thread retry metadata must never create malformed
+; branches even if an upstream cleanup path regresses.
+_ValidatedRetrySiblingGroup(threadId, parentId, siblingGroup, role := "assistant") {
+    if !siblingGroup || !threadId
+        return ""
+    rows := ChatDB.db.Query("SELECT parent_id, role FROM messages WHERE sibling_group=? AND thread_id=?;", siblingGroup, threadId)
+    if !rows.count {
+        debugLog("[BRANCH] Ignoring retry sibling group with no owner rows - thread=" threadId " group=" siblingGroup)
+        return ""
+    }
+    for row in rows.rows {
+        rowParent := row.parent_id ? row.parent_id : ""
+        if row.role != role || rowParent != parentId {
+            debugLog("[BRANCH] Ignoring malformed retry sibling group - thread=" threadId " group=" siblingGroup)
+            return ""
+        }
+    }
+    return siblingGroup
+}
+
 _handleStreamComplete() {
     try {
         ; The model asked to search: run the tool loop instead of finalizing.
@@ -54,21 +76,16 @@ _handleStreamComplete() {
         ; The finishing stream is still registered here, so exclude it while
         ; checking all other streams, search loops, and non-stream requests.
         currentStream := _FindStreamByKey(_currentStreamKey)
-        if !_HasOtherActiveOperations("", currentStream) {
-            postWebMessage("setChatButtonsEnabled", true)
-            startLoadingCursor(false)
-        }
+        _MaybeEnableThreadComposer(streamThreadId, "", currentStream)
         ; Always delete request/cURL temp files because they can contain credentials.
         deleteTempFiles()
     } catch Error as normErr {
         debugLog("Stream completion error: " normErr.Message "`nStack: " normErr.Stack)
-        _PostChatError("Request failed: " normErr.Message, requestParams.Has("_streamThreadId") ? requestParams["_streamThreadId"] : activeThreadId)
-        ; Completion-handler failures must still restore the UI to a usable state.
+        streamThreadId := requestParams.Has("_streamThreadId") ? requestParams["_streamThreadId"] : activeThreadId
+        _PostChatError("Request failed: " normErr.Message, streamThreadId)
+        ; Completion-handler failures must still restore only this thread's composer.
         currentStream := _FindStreamByKey(_currentStreamKey)
-        if !_HasOtherActiveOperations("", currentStream) {
-            postWebMessage("setChatButtonsEnabled", true)
-            startLoadingCursor(false)
-        }
+        _MaybeEnableThreadComposer(streamThreadId, "", currentStream)
         deleteTempFiles()
     }
 }
@@ -204,6 +221,7 @@ _persistStreamResponse(content, modelName, reasoning, usage, responseTimeMs := 0
             : (parentId ? ChatDB.Msg_GetPathToLeaf(streamThreadId, parentId) : ChatDB.Msg_GetActivePath(streamThreadId)))
     path := attributionPath
     retrySiblingGroup := requestParams.Has("pendingRetrySiblingGroup") ? requestParams["pendingRetrySiblingGroup"] : ""
+    retrySiblingGroup := _ValidatedRetrySiblingGroup(streamThreadId, parentId, retrySiblingGroup)
     retrySiblingIdx := retrySiblingGroup ? MessageRepo.GetMaxSiblingIndex(retrySiblingGroup) + 1 : 0
     if retrySiblingGroup
         requestParams.Delete("pendingRetrySiblingGroup")

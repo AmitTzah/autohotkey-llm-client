@@ -139,13 +139,8 @@ function updateChatMessages(newMessages) {
   var prevScrollHeight = container.scrollHeight;
   replaceMessagesAfter(divIdx, newMessages, divIdx);
   chatMessages = newMessages;
-  // Rebuilding the chat view during an in-flight request must not re-enable
-  // the composer; a second send would overwrite request stream state and orphan the first
-  // billed response. Keep the composer in Stop mode for the whole in-flight
-  // window (isLoading covers the pre-stream phase, streamState.active the
-  // streaming phase); only re-enable when idle.
-  var requestInFlight = isLoading || (typeof streamState !== 'undefined' && streamState.active);
-  setChatButtonsEnabled(!requestInFlight);
+  // Rebuilding the chat view must preserve only this thread's request state.
+  if (typeof syncChatButtonsForActiveThread === 'function') syncChatButtonsForActiveThread();
   if (typeof renderNavList === 'function') renderNavList();
   if (prevScrollHeight > 0) {
     var scrollEl = document.getElementById('chat-scroll') || container.parentElement;

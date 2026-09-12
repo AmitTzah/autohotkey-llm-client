@@ -80,7 +80,7 @@ describe('onChatSend — payload construction', () => {
         const origGetEl = ctx.document.getElementById;
         ctx.document.getElementById = (id) => {
             if (id === 'chat-input') return { value: '', style: {}, disabled: false, focus: () => {} };
-            if (id === 'chat-send-btn') return { disabled: false, textContent: '', onclick: null };
+            if (id === 'chat-send-btn') return { disabled: false, textContent: '', onclick: null, title: 'Send message', setAttribute(name, value) { this[name] = value; } };
             return origGetEl(id);
         };
         ctx.getAttachmentsForSend = () => [{ type: 'image', filename: 'test.png' }];
@@ -91,22 +91,60 @@ describe('onChatSend — payload construction', () => {
         assert.strictEqual(payload.attachments.length, 1);
     });
 
-    it('calls onStopStreaming when isLoading', () => {
+    it('calls onStopStreaming when the visible thread owns an in-flight request', () => {
         const { ctx, postedMessages } = loadInputModule();
-        ctx.isLoading = true;
+        ctx.activeThreadId = 't-A';
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: 't-A' });
         ctx.onChatSend();
         assert.strictEqual(postedMessages.length, 1);
-        assert.strictEqual(JSON.parse(postedMessages[0]).action, 'cancelStream');
+        const payload = JSON.parse(postedMessages[0]);
+        assert.strictEqual(payload.action, 'cancelStream');
+        assert.strictEqual(payload.threadId, 't-A');
     });
 
-    it('never sends while a stream is active even if isLoading was reset (bug #214/#218)', () => {
+    it('never sends into the same busy thread even if isLoading was reset (bug #214/#218)', () => {
         const { ctx, postedMessages } = loadInputModule();
-        ctx.isLoading = false;               // mismatched composer state
-        ctx.streamState = { active: true };  // the first stream is still in flight
+        ctx.activeThreadId = 't-A';
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: 't-A' });
+        ctx.isLoading = false; // deliberately desync the visible scalar
         ctx.onChatSend();
-        assert.strictEqual(postedMessages.length, 1, 'no chatSend may be posted mid-stream');
+        assert.strictEqual(postedMessages.length, 1, 'no chatSend may be posted into the busy thread');
         assert.strictEqual(JSON.parse(postedMessages[0]).action, 'cancelStream',
-            'Enter/click during an active stream must cancel, not send a second request');
+            'the per-thread ownership map must still route the click to Stop');
+    });
+
+    it('retires provisional new-chat busy state when the durable thread id arrives', () => {
+        const { ctx } = loadInputModule();
+
+        ctx.activeThreadId = '';
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: '' });
+        assert.strictEqual(ctx.isThreadRequestInFlight(''), true);
+
+        ctx.activeThreadId = 't-created';
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: 't-created' });
+        assert.strictEqual(ctx.isThreadRequestInFlight('t-created'), true);
+
+        ctx.activeThreadId = '';
+        ctx.syncChatButtonsForActiveThread();
+        assert.strictEqual(ctx.isLoading, false,
+            'a later blank New Chat must not inherit the first chat\'s provisional Stop state');
+    });
+
+    it('keeps chat B sendable while chat A is generating', () => {
+        const { ctx, postedMessages } = loadInputModule();
+        ctx.activeThreadId = 't-B';
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: 't-A' });
+
+        assert.strictEqual(ctx.isLoading, false, 'background A must not mark visible B as loading');
+        ctx.onChatSend();
+
+        assert.strictEqual(postedMessages.length, 1);
+        assert.strictEqual(JSON.parse(postedMessages[0]).action, 'chatSend',
+            'B must still be able to send while A is generating');
+
+        ctx.activeThreadId = 't-A';
+        ctx.syncChatButtonsForActiveThread();
+        assert.strictEqual(ctx.isLoading, true, 'switching back to A must restore Stop mode');
     });
 
     it('shows loading dots when AHK starts a request before streaming begins', () => {
@@ -189,11 +227,29 @@ describe('onChatSend — payload construction', () => {
 });
 
 describe('retryLastAssistantMessage', () => {
-    it('does nothing when isLoading', () => {
+    it('does nothing when the visible thread is already generating', () => {
         const { ctx, postedMessages } = loadInputModule();
-        ctx.isLoading = true;
+        ctx.activeThreadId = 't-A';
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: 't-A' });
         ctx.retryLastAssistantMessage('msg-1');
         assert.strictEqual(postedMessages.length, 0);
+    });
+
+    it('allows regenerate in chat B while chat A is generating', () => {
+        const { ctx, postedMessages } = loadInputModule();
+        ctx.setChatButtonsEnabled({ enabled: false, threadId: 't-A' });
+        ctx.activeThreadId = 't-B';
+        ctx.chatMessages = [
+            { id: 'u1', role: 'user', content: 'q' },
+            { id: 'a1', role: 'assistant', content: 'answer' }
+        ];
+
+        ctx.retryLastAssistantMessage('a1');
+
+        assert.strictEqual(postedMessages.length, 1);
+        const payload = JSON.parse(postedMessages[0]);
+        assert.strictEqual(payload.action, 'retry');
+        assert.strictEqual(payload.messageId, 'a1');
     });
 
     it('sends retry with messageId', () => {

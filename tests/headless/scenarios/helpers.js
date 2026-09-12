@@ -143,7 +143,7 @@ async function sendChatMessage(cdp, text) {
 
 async function waitStreamingIdle(cdp, timeoutMs = 30000) {
   await cdp.waitFor(
-    'typeof streamState !== "undefined" && !streamState.active && !isLoading',
+    'typeof streamState !== "undefined" && !streamState.active && !isLoading && (typeof _threadRequestState === "undefined" || Object.keys(_threadRequestState).length === 0)',
     timeoutMs, 100, 'stream idle'
   );
 }

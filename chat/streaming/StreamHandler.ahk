@@ -81,8 +81,7 @@ sendStreamingRequest(&chatHistoryJSONRequest, initialRequest := false) {
     SetTimer(_pollStreamTimer, 100)
     } catch Error as e {
         debugLog("sendStreamingRequest error: " e.Message)
-        postWebMessage("setChatButtonsEnabled", true)
-        startLoadingCursor(false)
+        _MaybeEnableThreadComposer(activeThreadId)
         _PostChatError("Request failed: " e.Message, activeThreadId)
     }
 }
@@ -151,8 +150,7 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
 
         if scope.cancelled {
             _DeleteToolLoopFiles(scope)
-            if !_HasOtherActiveOperations("", "", scope)
-                postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+            _MaybeEnableThreadComposer(scope.threadId, "", "", scope)
             return
         }
 
@@ -167,9 +165,9 @@ sendNonStreamingRequest(&chatHistoryJSONRequest) {
         debugLog("sendNonStreamingRequest error: " e.Message)
         if IsSet(scope)
             _RemoveNonStreamRequest(scope)
-        _PostChatError("Request failed: " e.Message, IsSet(scope) && IsObject(scope) ? scope.threadId : activeThreadId)
-        if !_HasOtherActiveOperations()
-            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+        errorThreadId := IsSet(scope) && IsObject(scope) ? scope.threadId : activeThreadId
+        _PostChatError("Request failed: " e.Message, errorThreadId)
+        _MaybeEnableThreadComposer(errorThreadId, "", "", IsSet(scope) && IsObject(scope) ? scope : "")
         _cleanupStreamState()
         deleteTempFiles()
     }
@@ -235,8 +233,7 @@ _CompleteCodexNonStreamingRequest(asyncState, codexResult) {
     if scope.cancelled {
         _DeleteToolLoopFiles(scope)
         postWebMessage("streamCancelled", { threadId: scope.threadId })
-        if !_HasOtherActiveOperations("", "", scope)
-            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+        _MaybeEnableThreadComposer(scope.threadId, "", "", scope)
         return
     }
     CodexCliTransport._Trace(scope, "ahk.codex.response-processing.begin")
@@ -248,8 +245,7 @@ _FailCodexNonStreamingRequest(scope, e) {
     _RemoveNonStreamRequest(scope)
     _DeleteToolLoopFiles(scope)
     _PostChatError("Request failed: " e.Message, scope.threadId)
-    if !_HasOtherActiveOperations("", "", scope)
-        postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+    _MaybeEnableThreadComposer(scope.threadId, "", "", scope)
 }
 
 _RunCodexNonStreamingRequestSyncLegacy(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {
@@ -285,8 +281,7 @@ _RunCodexNonStreamingRequestSyncLegacy(scope, chatHistoryJSONRequest, providerIn
         if scope.cancelled {
             _DeleteToolLoopFiles(scope)
             postWebMessage("streamCancelled", { threadId: scope.threadId })
-            if !_HasOtherActiveOperations("", "", scope)
-                postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+            _MaybeEnableThreadComposer(scope.threadId, "", "", scope)
             return
         }
         CodexCliTransport._Trace(scope, "ahk.codex.response-processing.begin")
@@ -296,9 +291,27 @@ _RunCodexNonStreamingRequestSyncLegacy(scope, chatHistoryJSONRequest, providerIn
         _RemoveNonStreamRequest(scope)
         _DeleteToolLoopFiles(scope)
         _PostChatError("Request failed: " e.Message, scope.threadId)
-        if !_HasOtherActiveOperations("", "", scope)
-            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+        _MaybeEnableThreadComposer(scope.threadId, "", "", scope)
     }
+}
+
+; A non-stream request owns both a thread and the branch/path captured at
+; dispatch. Thread-only scoping is insufficient: navigating to a sibling branch
+; in the same thread must not paint the originating Codex activity there.
+_NonStreamScopeBelongsToCurrentPath(scope) {
+    global activeThreadId
+    if !IsObject(scope) || activeThreadId != scope.threadId
+        return false
+    if ThreadLockService.IsLocked(scope.threadId) &&
+        !ThreadLockService.IsUnlockedInSession(scope.threadId)
+        return false
+    if IsObject(scope.params) && scope.params.Has("pendingRetryIsRoot") &&
+        scope.params["pendingRetryIsRoot"]
+        return true
+    if !scope.HasOwnProp("parentId") || !scope.parentId
+        return true
+    path := ChatDB.Msg_GetActivePath(scope.threadId)
+    return path.Length && path[path.Length].id = scope.parentId
 }
 
 ; Codex exec is one-shot at the response boundary, but --json stdout is a live
@@ -313,9 +326,12 @@ _BeginCodexActivity(scope, providerInfo) {
         if asst && asst.name
             displayName := asst.name
     }
+    scope.activityDisplayName := displayName
+    scope.activityProviderKey := providerInfo.providerKey
     ; Do not invent a Thinking... line. The loading indicator remains until
     ; Codex actually emits a public reasoning summary, commentary, or tool item.
-    postWebMessage("streamModelName", { name: displayName, provider: providerInfo.providerKey, threadId: scope.threadId })
+    if _NonStreamScopeBelongsToCurrentPath(scope)
+        postWebMessage("streamModelName", { name: displayName, provider: providerInfo.providerKey, threadId: scope.threadId })
 }
 
 _PostCodexActivity(scope, providerInfo, progress) {
@@ -341,7 +357,9 @@ _PostCodexActivity(scope, providerInfo, progress) {
         data.summary := progress.summary
     if progress.HasOwnProp("searchCount")
         data.searchCount := progress.searchCount
-    postWebMessage("streamReasoning", data)
+    scope.activityProgress := data
+    if _NonStreamScopeBelongsToCurrentPath(scope)
+        postWebMessage("streamReasoning", data)
 }
 
 _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestStartTime) {
@@ -375,6 +393,11 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
         requestParams["_streamChatHistoryJSONRequest"] := chatHistoryJSONRequest
         requestParams["_streamPID"] := 0
         requestParams["_streamCancelled"] := false
+        ; A non-stream scope is cloned from the shared request window. Never let
+        ; stale tool-call runtime state from a completed/failed stream become
+        ; this synthetic response's tool state.
+        requestParams["_streamToolCalls"] := Map()
+        requestParams["_streamToolLoopCount"] := 0
         requestParams["_streamThreadId"] := scope.threadId
         requestParams["_streamParentId"] := scope.parentId
         requestParams["_streamLogWindowTitle"] := requestParams["windowTitle"]
@@ -403,6 +426,10 @@ _ProcessNonStreamResponse(scope, chatHistoryJSONRequest, providerInfo, requestSt
         if response.model != ""
             requestParams["_streamModelName"] := ModelParser.Sanitize(response.model)
         requestParams["_streamFirstTokenTime"] := A_TickCount
+        ; The non-stream response was already parsed above. Do not feed the
+        ; synthetic JSON output back through the SSE reader during finalization;
+        ; model text may legitimately contain `data: ` and resemble an SSE line.
+        requestParams["_streamOutputAlreadyParsed"] := true
         CodexCliTransport._Trace(scope, "ahk.codex.finalize.begin")
         _finalizeStreaming()
     } finally {
@@ -454,8 +481,7 @@ _handleNonStreamToolCalls(toolCalls, ownerScope := "") {
             ; NOT fire the follow-up request.
             _handleSearchCancelledCard(loopState)
             _FinishToolLoop(loopState)
-            if !_HasOtherActiveOperations(loopState)
-                postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+            _MaybeEnableThreadComposer(loopState.threadId, loopState)
             return
         }
         ; Every search in this round failed (empty backend answers, API
@@ -551,22 +577,47 @@ _shouldPostStreamToUI() {
 ; When the user navigates BACK to the sending thread/branch while its stream is
 ; still in flight, re-paint the accumulated partial so the UI is not blank.
 _RepostActiveStreamForThread(threadId) {
-    ; Find the newest in-flight stream that sent a request for this
-    ; thread (multiple commands can be streaming at once).
+    ; Restore a streaming request only when its captured path is visible.
     stream := _FindLatestStreamForThread(threadId)
-    if !stream
+    if stream {
+        _LoadStreamIntoParams(stream)
+        if _shouldPostStreamToUI() {
+            if stream.displayName != ""
+                postWebMessage("streamModelName", { name: stream.displayName, provider: stream.providerKey, threadId: stream.threadId })
+            reasoning := stream.reasoning
+            content := stream.content
+            if reasoning != ""
+                postWebMessage("streamReasoning", {
+                    content: reasoning,
+                    collapsed: false,
+                    replace: true,
+                    repost: true,
+                    threadId: stream.threadId
+                })
+            if content != ""
+                postWebMessage("streamContent", content)
+        }
+    }
+
+    ; Codex/non-stream requests are tracked outside _activeStreams. Repaint
+    ; their synthetic activity only when the SAME originating branch is visible.
+    scope := _FindNonStreamRequestForThread(threadId)
+    if !IsObject(scope) || !_NonStreamScopeBelongsToCurrentPath(scope)
         return
-    _LoadStreamIntoParams(stream)
-    if !_shouldPostStreamToUI()
-        return
-    if stream.displayName != ""
-        postWebMessage("streamModelName", { name: stream.displayName, provider: stream.providerKey, threadId: stream.threadId })
-    reasoning := stream.reasoning
-    content := stream.content
-    if reasoning != ""
-        postWebMessage("streamReasoning", { content: reasoning, collapsed: false })
-    if content != ""
-        postWebMessage("streamContent", content)
+    if scope.HasOwnProp("activityDisplayName") && scope.activityDisplayName != ""
+        postWebMessage("streamModelName", {
+            name: scope.activityDisplayName,
+            provider: scope.HasOwnProp("activityProviderKey") ? scope.activityProviderKey : "",
+            threadId: scope.threadId
+        })
+    if scope.HasOwnProp("activityProgress") && IsObject(scope.activityProgress) {
+        ; This is a complete snapshot for a branch reload, not a new incremental
+        ; Codex progress fragment. Mark it so the WebView can rebuild detached
+        ; transient stream DOM after branch navigation.
+        scope.activityProgress.replace := true
+        scope.activityProgress.repost := true
+        postWebMessage("streamReasoning", scope.activityProgress)
+    }
 }
 
 ; Build the per-request stream record and capture every field
@@ -576,6 +627,9 @@ _RepostActiveStreamForThread(threadId) {
 _BuildStreamRecord(chatHistoryJSONRequest, providerInfo, cURLPID, displayName, sanitizedModel, requestStartTime) {
     retryIsRoot := requestParams.Has("pendingRetryIsRoot") && requestParams["pendingRetryIsRoot"]
     retrySiblingGroup := requestParams.Has("pendingRetrySiblingGroup") ? requestParams["pendingRetrySiblingGroup"] : ""
+    retryThreadId := requestParams.Has("pendingRetryThreadId") ? requestParams["pendingRetryThreadId"] : ""
+    retryOriginalLeaf := requestParams.Has("pendingRetryOriginalLeaf") ? requestParams["pendingRetryOriginalLeaf"] : ""
+    retryRewoundLeaf := requestParams.Has("pendingRetryRewoundLeaf") ? requestParams["pendingRetryRewoundLeaf"] : ""
     requestPath := requestParams.Has("_requestPath")
         ? requestParams["_requestPath"]
         : ChatDB.Msg_GetActivePath(activeThreadId)
@@ -623,6 +677,9 @@ _BuildStreamRecord(chatHistoryJSONRequest, providerInfo, cURLPID, displayName, s
         logPasteMode: requestParams["pasteMode"],
         retryIsRoot: retryIsRoot,
         retrySiblingGroup: retrySiblingGroup,
+        retryThreadId: retryThreadId,
+        retryOriginalLeaf: retryOriginalLeaf,
+        retryRewoundLeaf: retryRewoundLeaf,
         ; Keep each request's own temp-file paths so cleanup cannot target another request.
         ; THESE, not whatever request started later).
         requestFile: requestParams["chatHistoryJSONRequestFile"],
@@ -684,6 +741,21 @@ _LoadStreamIntoParams(stream) {
         requestParams["pendingRetrySiblingGroup"] := stream.retrySiblingGroup
     else if requestParams.Has("pendingRetrySiblingGroup")
         requestParams.Delete("pendingRetrySiblingGroup")
+    retryThreadId := stream.HasOwnProp("retryThreadId") ? stream.retryThreadId : ""
+    retryOriginalLeaf := stream.HasOwnProp("retryOriginalLeaf") ? stream.retryOriginalLeaf : ""
+    retryRewoundLeaf := stream.HasOwnProp("retryRewoundLeaf") ? stream.retryRewoundLeaf : ""
+    if retryThreadId != ""
+        requestParams["pendingRetryThreadId"] := retryThreadId
+    else if requestParams.Has("pendingRetryThreadId")
+        requestParams.Delete("pendingRetryThreadId")
+    if retryOriginalLeaf != ""
+        requestParams["pendingRetryOriginalLeaf"] := retryOriginalLeaf
+    else if requestParams.Has("pendingRetryOriginalLeaf")
+        requestParams.Delete("pendingRetryOriginalLeaf")
+    if retryRewoundLeaf != ""
+        requestParams["pendingRetryRewoundLeaf"] := retryRewoundLeaf
+    else if requestParams.Has("pendingRetryRewoundLeaf")
+        requestParams.Delete("pendingRetryRewoundLeaf")
     _currentStreamKey := stream.key
 }
 
@@ -798,9 +870,9 @@ _RemoveNonStreamRequest(scope) {
     }
 }
 
-; Aggregate in-flight check used by tool-loop cleanup. The current operation
-; can be excluded while it is being removed; other streams/searches keep the
-; composer in Stop mode.
+; Aggregate in-flight check used for process-global cleanup (for example the
+; native loading cursor). Composer Send/Stop state uses the thread-scoped
+; helper below instead.
 _HasOtherActiveOperations(currentLoop := "", currentStream := "", currentRequest := "") {
     for stream in _activeStreams
         if !IsObject(currentStream) || stream.key != currentStream.key
@@ -812,6 +884,34 @@ _HasOtherActiveOperations(currentLoop := "", currentStream := "", currentRequest
         if !IsObject(currentRequest) || scope.key != currentRequest.key
             return true
     return false
+}
+
+; Same as _HasOtherActiveOperations, but restricted to one conversation.
+; Different chats are independent: another thread's request must never keep this
+; thread's composer in Stop mode.
+_HasOtherActiveOperationsForThread(threadId, currentLoop := "", currentStream := "", currentRequest := "") {
+    if !threadId
+        return false
+    for stream in _activeStreams
+        if stream.threadId = threadId && (!IsObject(currentStream) || stream.key != currentStream.key)
+            return true
+    for loopState in _activeToolLoops
+        if loopState.threadId = threadId && (!IsObject(currentLoop) || loopState.key != currentLoop.key)
+            return true
+    for scope in _activeNonStreamRequests
+        if scope.threadId = threadId && (!IsObject(currentRequest) || scope.key != currentRequest.key)
+            return true
+    return false
+}
+
+_MaybeEnableThreadComposer(threadId, currentLoop := "", currentStream := "", currentRequest := "") {
+    if threadId && !_HasOtherActiveOperationsForThread(threadId, currentLoop, currentStream, currentRequest)
+        postWebMessage("setChatButtonsEnabled", { enabled: true, threadId: threadId })
+
+    ; The native loading cursor remains process-global and should clear only
+    ; after every conversation is idle.
+    if !_HasOtherActiveOperations(currentLoop, currentStream, currentRequest)
+        startLoadingCursor(false)
 }
 
 _RemoveToolLoop(loopState) {
@@ -837,7 +937,7 @@ _BuildAndFireRequestForScope(loopState) {
     requestParams := loopState.params
     activeThreadId := loopState.threadId
     try {
-        return _BuildAndFireRequest()
+        return _BuildAndFireRequest(loopState.requestPath)
     } finally {
         loopState.params := requestParams
         requestParams := visibleParams
@@ -857,15 +957,31 @@ _DeleteToolLoopFiles(loopState) {
     }
 }
 
+_ClearToolLoopParams(params) {
+    if !IsObject(params)
+        return
+    for key in ["_pendingToolMessages", "_pendingSearchContextIds", "_toolLoopCount"] {
+        if params.Has(key)
+            params.Delete(key)
+    }
+}
+
 _FinishToolLoop(loopState, stream := "", preserveStaged := false) {
     if !IsObject(loopState)
         return
     _RemoveToolLoop(loopState)
     _DeleteToolLoopFiles(loopState)
     if !preserveStaged {
-        for key in ["_pendingToolMessages", "_pendingSearchContextIds", "_toolLoopCount"] {
-            if loopState.params.Has(key)
-                loopState.params.Delete(key)
+        _ClearToolLoopParams(loopState.params)
+        if IsObject(stream) && stream.HasOwnProp("requestParamsSnapshot")
+            _ClearToolLoopParams(stream.requestParamsSnapshot)
+        ; If this loop owns the shared request window, scrub its stream/tool
+        ; runtime before removing the stream record. Otherwise stale
+        ; _streamToolCalls can be cloned by a later non-stream/Codex request.
+        ; Never touch the window when another stream owns it.
+        if IsObject(stream) && _currentStreamKey = stream.key {
+            _ClearToolLoopParams(requestParams)
+            _cleanupStreamState()
         }
     }
     if IsObject(stream) {
@@ -1139,7 +1255,8 @@ _mergeToolCallDeltas(state, fragments) {
 
 _finalizeStreaming() {
     try {
-        _readStreamChunkFromParams()
+        if !(requestParams.Has("_streamOutputAlreadyParsed") && requestParams["_streamOutputAlreadyParsed"])
+            _readStreamChunkFromParams()
         contentLen := StrLen(requestParams["_streamContent"])
         reasoningLen := StrLen(requestParams["_streamReasoning"])
         debugLog("[STREAM] Finalizing — content=" contentLen "chars reasoning=" reasoningLen "chars polls=" requestParams["_streamPollCount"])
@@ -1204,11 +1321,9 @@ _finalizeStreaming() {
         ; The finishing stream is still registered here, so exclude it while
         ; checking all other streams, search loops, and non-stream requests.
         currentStream := _FindStreamByKey(_currentStreamKey)
-        if !_HasOtherActiveOperations("", currentStream) {
-            postWebMessage("setChatButtonsEnabled", true)
-            startLoadingCursor(false)
-        }
-        _PostChatError("Request failed: " e.Message, requestParams.Has("_streamThreadId") ? requestParams["_streamThreadId"] : activeThreadId)
+        errorThreadId := requestParams.Has("_streamThreadId") ? requestParams["_streamThreadId"] : activeThreadId
+        _MaybeEnableThreadComposer(errorThreadId, "", currentStream)
+        _PostChatError("Request failed: " e.Message, errorThreadId)
         _cleanupStreamState()
         _FinishStreamFinalize()
     }
@@ -1266,8 +1381,7 @@ _handleStreamToolCalls() {
             ; NOT fire the follow-up request.
             _handleSearchCancelledCard(loopState)
             _FinishToolLoop(loopState, stream)
-            if !_HasOtherActiveOperations(loopState, stream)
-                postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+            _MaybeEnableThreadComposer(loopState.threadId, loopState, stream)
             return
         }
         ; Same all-failed guard as the non-streaming path: stop the loop
@@ -1333,8 +1447,7 @@ _failToolLoop(message, contextText := "", loopState := "", stream := "") {
         _cleanupStreamState()
         _RestoreLastActiveStream()
     }
-    if !_activeStreams.Length && !_activeToolLoops.Length && !_activeNonStreamRequests.Length
-        postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+    _MaybeEnableThreadComposer(errorThreadId, loopState, stream)
 }
 
 _deleteCurrentStreamFiles() {
@@ -1432,6 +1545,12 @@ _cleanupStreamState() {
         requestParams.Delete("_streamPID")
     if requestParams.Has("_streamCancelled")
         requestParams.Delete("_streamCancelled")
+    if requestParams.Has("_streamToolCalls")
+        requestParams.Delete("_streamToolCalls")
+    if requestParams.Has("_streamToolLoopCount")
+        requestParams.Delete("_streamToolLoopCount")
+    if requestParams.Has("_streamOutputAlreadyParsed")
+        requestParams.Delete("_streamOutputAlreadyParsed")
     if requestParams.Has("_streamThreadId")
         requestParams.Delete("_streamThreadId")
     if requestParams.Has("_streamParentId")

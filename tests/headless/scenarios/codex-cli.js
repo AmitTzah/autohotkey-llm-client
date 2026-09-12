@@ -751,4 +751,354 @@ scenarios.push({
   }
 });
 
+
+
+scenarios.push({
+  id: 339,
+  name: 'Codex non-streaming requests are thread-scoped: B stays sendable while A runs, concurrent Codex requests coexist, and stopping A never cancels B',
+  regression: true,
+  mode: null,
+  settings: { threadTitles: { enabled: false } },
+  fixtures: {
+    threads: [
+      {
+        id: 't-codex-a-339', title: 'Codex A', active_leaf_id: 'm-codex-a-339-a1',
+        model_override: 'codex/gpt-5.6-luna', reasoning_override: 'medium', reasoning_override_set: 1
+      },
+      {
+        id: 't-codex-b-339', title: 'Codex B', active_leaf_id: 'm-codex-b-339-a1',
+        model_override: 'codex/gpt-5.6-luna', reasoning_override: 'medium', reasoning_override_set: 1
+      }
+    ],
+    messages: [
+      { id: 'm-codex-a-339-u1', thread_id: 't-codex-a-339', role: 'user', content: 'A seed' },
+      { id: 'm-codex-a-339-a1', thread_id: 't-codex-a-339', role: 'assistant', content: 'A seed answer', parent_id: 'm-codex-a-339-u1', model: 'codex/gpt-5.6-luna' },
+      { id: 'm-codex-b-339-u1', thread_id: 't-codex-b-339', role: 'user', content: 'B seed' },
+      { id: 'm-codex-b-339-a1', thread_id: 't-codex-b-339', role: 'assistant', content: 'B seed answer', parent_id: 'm-codex-b-339-u1', model: 'codex/gpt-5.6-luna' }
+    ]
+  },
+  preLaunch(dataDir) { installFakeCodex(dataDir); },
+  launchEnv: fakeLaunchEnv,
+  async body({ cdp, dataDir, dbPath }) {
+    const buttonMode = "(() => { var b=document.getElementById('chat-send-btn'); if(!b||!b.onclick)return 'none'; if(b.onclick===onStopStreaming)return 'stop'; if(b.onclick===onChatSend)return 'send'; return 'other'; })()";
+
+    await showChat();
+    await cdp.eval('window.loadThread("t-codex-a-339"); true');
+    await cdp.waitFor('window.activeThreadId === "t-codex-a-339" && chatMessages.some((m) => m.id === "m-codex-a-339-a1") && window._currentSettings && window._currentSettings.model === "codex/gpt-5.6-luna"', 15000, 250, 'Codex A loaded');
+
+    // A deliberately never completes until Stop kills its process.
+    await sendChatMessage(cdp, 'cancel this codex request');
+    await cdp.waitFor('isThreadRequestInFlight("t-codex-a-339")', 10000, 50, 'Codex A busy');
+    await cdp.waitFor('document.querySelector("#chat-messages .thinking-content") && document.querySelector("#chat-messages .thinking-content").textContent.indexOf("Beginning a cancellable Codex response") >= 0', 15000, 100, 'Codex A reasoning');
+
+    await cdp.eval('window.loadThread("t-codex-b-339"); true');
+    await cdp.waitFor('window.activeThreadId === "t-codex-b-339" && chatMessages.some((m) => m.id === "m-codex-b-339-a1") && window._currentSettings && window._currentSettings.model === "codex/gpt-5.6-luna"', 15000, 250, 'Codex B loaded');
+    await sleep(200);
+
+    const bIdleMode = await cdp.eval(buttonMode);
+    const bIdleDisabled = await cdp.eval('document.getElementById("chat-input").disabled');
+    if (bIdleMode !== 'send' || bIdleDisabled)
+      throw new Error('idle Codex B inherited A busy state: mode=' + bIdleMode + ' inputDisabled=' + bIdleDisabled);
+
+    await sendChatMessage(cdp, 'slow thread b');
+    await cdp.waitFor('isThreadRequestInFlight("t-codex-a-339") && isThreadRequestInFlight("t-codex-b-339")', 10000, 50, 'both Codex requests busy');
+    await cdp.waitFor('document.querySelector("#chat-messages .thinking-content") && document.querySelector("#chat-messages .thinking-content").textContent.indexOf("Working on concurrent thread B") >= 0', 15000, 100, 'Codex B reasoning');
+
+    let execs = execLog(dataDir);
+    if (execs.length !== 2)
+      throw new Error('expected two concurrent Codex execs, got ' + JSON.stringify(execs));
+
+    await cdp.eval('window.loadThread("t-codex-a-339"); true');
+    await cdp.waitFor('window.activeThreadId === "t-codex-a-339" && chatMessages.some((m) => m.content === "cancel this codex request")', 15000, 250, 'Codex A returned');
+    await sleep(150);
+    if (await cdp.eval(buttonMode) !== 'stop')
+      throw new Error('busy Codex A did not restore Stop mode');
+
+    await cdp.click('#chat-send-btn');
+    await cdp.waitFor('!isThreadRequestInFlight("t-codex-a-339") && isThreadRequestInFlight("t-codex-b-339")', 15000, 50, 'A stopped while B remained busy');
+
+    await cdp.eval('window.loadThread("t-codex-b-339"); true');
+    await cdp.waitFor('window.activeThreadId === "t-codex-b-339" && chatMessages.some((m) => m.content === "slow thread b")', 15000, 250, 'Codex B returned after A stop');
+    await sleep(150);
+
+    const bBusyMode = await cdp.eval(buttonMode);
+    const bBusyDisabled = await cdp.eval('document.getElementById("chat-input").disabled');
+    if (bBusyMode !== 'stop' || !bBusyDisabled)
+      throw new Error('stopping Codex A changed B busy state: mode=' + bBusyMode + ' inputDisabled=' + bBusyDisabled);
+
+    await waitStreamingIdle(cdp, 30000);
+    await sleep(500);
+
+    const aAssistantRows = seed.query(dbPath,
+      "SELECT content FROM messages WHERE thread_id='t-codex-a-339' AND role='assistant'");
+    const aCancelledFinal = aAssistantRows.filter((row) => String(row.content || '').trim() === 'BASIC CODEX ANSWER').length;
+    const bAssistantRows = seed.query(dbPath,
+      "SELECT content, reasoning FROM messages WHERE thread_id='t-codex-b-339' AND role='assistant'");
+    const bRows = bAssistantRows.filter((row) => String(row.content || '').trim() === 'THREAD B CODEX ANSWER');
+    if (aCancelledFinal !== 0)
+      throw new Error('cancelled Codex A persisted a final response: ' + JSON.stringify(aAssistantRows));
+    if (bRows.length !== 1 || String(bRows[0].reasoning || '').indexOf('Working on concurrent thread B') < 0)
+      throw new Error('Codex B did not complete independently after A was stopped: ' + JSON.stringify(bAssistantRows));
+
+    return 'Codex A stayed isolated from idle B; A+B ran concurrently; stopping A left B in Stop mode until B completed and persisted its own final+reasoning';
+  }
+});
+
+
+scenarios.push({
+  id: 340,
+  name: 'Codex final answer containing an SSE-looking data marker is persisted as ordinary text and never re-parsed as SSE',
+  regression: true,
+  mode: null,
+  settings: { threadTitles: { enabled: false } },
+  fixtures: {
+    threads: [{
+      id: 't-codex-data-340', title: 'Codex Data Marker', active_leaf_id: 'm-codex-data-340-a1',
+      model_override: 'codex/gpt-5.6-luna', reasoning_override: 'medium', reasoning_override_set: 1
+    }],
+    messages: [
+      { id: 'm-codex-data-340-u1', thread_id: 't-codex-data-340', role: 'user', content: 'seed' },
+      { id: 'm-codex-data-340-a1', thread_id: 't-codex-data-340', role: 'assistant', content: 'seed answer', parent_id: 'm-codex-data-340-u1', model: 'codex/gpt-5.6-luna' }
+    ]
+  },
+  preLaunch(dataDir) { installFakeCodex(dataDir); },
+  launchEnv: fakeLaunchEnv,
+  async body({ cdp, dbPath }) {
+    await showChat();
+    await cdp.eval('window.loadThread("t-codex-data-340"); true');
+    await cdp.waitFor(
+      'window.activeThreadId === "t-codex-data-340" && chatMessages.some((m) => m.id === "m-codex-data-340-a1") && window._currentSettings && window._currentSettings.model === "codex/gpt-5.6-luna"',
+      15000, 250, 'Codex data-marker thread loaded'
+    );
+
+    await sendChatMessage(cdp, 'codex data marker');
+    await cdp.waitFor('isThreadRequestInFlight("t-codex-data-340")', 10000, 50, 'Codex data-marker request busy');
+    await waitStreamingIdle(cdp, 30000);
+    await sleep(400);
+
+    const rows = seed.query(dbPath,
+      "SELECT content FROM messages WHERE thread_id='t-codex-data-340' AND role='assistant'");
+    const matched = rows.filter((row) => {
+      const text = String(row.content || '');
+      return text.includes('CODEX DATA MARKER ANSWER') &&
+        text.includes('data: "embedded scalar text"');
+    });
+    if (matched.length !== 1)
+      throw new Error('Codex data-marker answer did not persist intact: ' + JSON.stringify(rows));
+
+    const errorVisible = await cdp.eval(
+      'document.body && document.body.textContent.indexOf("Request failed: This value of type") >= 0'
+    );
+    if (errorVisible)
+      throw new Error('Codex answer was re-parsed as SSE and surfaced the scalar .Has failure');
+
+    return 'Codex answer containing data: "embedded scalar text" persisted intact without entering SSE parsing';
+  }
+});
+
+
+scenarios.push({
+  id: 342,
+  name: 'Web-search ceiling terminates only its request and a fresh Codex chat sends normally afterward',
+  regression: true,
+  mode: 'sse-tool-call',
+  settings: {
+    threadTitles: { enabled: false },
+    newChatStartsWith: 'codex/gpt-5.6-luna',
+    tavilyApiKey: 'test-tavily-key'
+  },
+  mockOpts: {
+    toolRounds: 61,
+    searchQuery: 'ceiling ownership query',
+    tavilyAnswer: 'fast ceiling search result',
+    tavilyDelay: 1,
+    toolCallDelay: 1
+  },
+  fixtures: {
+    threads: [{
+      id: 't-search-ceiling-342', title: 'Search Ceiling', active_leaf_id: 'm-search-ceiling-342-a1',
+      model_override: 'openai/gpt-5-mini'
+    }],
+    messages: [
+      { id: 'm-search-ceiling-342-u1', thread_id: 't-search-ceiling-342', role: 'user', content: 'seed search question' },
+      { id: 'm-search-ceiling-342-a1', thread_id: 't-search-ceiling-342', role: 'assistant', content: 'seed search answer', parent_id: 'm-search-ceiling-342-u1', model: 'openai/gpt-5-mini' }
+    ]
+  },
+  preLaunch(dataDir, endpoint) {
+    installFakeCodex(dataDir);
+    const settingsFile = path.join(dataDir, 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    settings.tavilyEndpoint = String(endpoint).replace(/chat\/completions$/, '') + 'search';
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf8');
+  },
+  launchEnv: fakeLaunchEnv,
+  async body({ cdp, dbPath, dataDir }) {
+    await showChat();
+    await cdp.eval('window.loadThread("t-search-ceiling-342"); true');
+    await cdp.waitFor(
+      'window.activeThreadId === "t-search-ceiling-342" && window._currentSettings && window._currentSettings.model === "openai/gpt-5-mini"',
+      15000, 250, 'search ceiling thread loaded'
+    );
+
+    await cdp.waitFor('document.getElementById("webSearchToggle") !== null', 10000, 100, 'Web Search toggle');
+    await cdp.eval('document.getElementById("webSearchToggle").classList.contains("on") ? true : (document.getElementById("webSearchToggle").click(), true)');
+    await cdp.waitFor('window._currentSettings && window._currentSettings.webSearch === true', 5000, 100, 'Web Search enabled');
+    await cdp.eval('typeof _sendAllSettings === "function" ? (_sendAllSettings(true), true) : false');
+    await sleep(250);
+
+    await sendChatMessage(cdp, 'force repeated web searches to the ceiling');
+    await cdp.waitFor(
+      'document.body && document.body.textContent.indexOf("too many search rounds (max 60)") >= 0',
+      90000, 100, 'terminal search ceiling error'
+    );
+    await cdp.waitFor(
+      'typeof isThreadRequestInFlight === "function" && !isThreadRequestInFlight("t-search-ceiling-342")',
+      15000, 100, 'failed search request fully released'
+    );
+
+    const terminalRows = seed.query(dbPath,
+      "SELECT content FROM messages WHERE thread_id='t-search-ceiling-342' AND content LIKE '%too many search rounds (max 60)%'");
+    if (terminalRows.length !== 1)
+      throw new Error('terminal ceiling search context missing or duplicated: ' + JSON.stringify(terminalRows));
+
+    const oldThread = await cdp.eval('window.activeThreadId');
+    await cdp.click('#new-chat-btn');
+    await cdp.waitFor('window.activeThreadId && window.activeThreadId !== ' + JSON.stringify(oldThread), 15000, 250, 'fresh chat created');
+    const freshThread = await cdp.eval('window.activeThreadId');
+    await cdp.waitFor(
+      'window._currentSettings && window._currentSettings.model === "codex/gpt-5.6-luna"',
+      15000, 200, 'fresh chat Codex default applied'
+    );
+
+    await sendChatMessage(cdp, 'normal codex after search ceiling');
+    await cdp.waitFor('isThreadRequestInFlight(' + JSON.stringify(freshThread) + ')', 10000, 50, 'fresh Codex request started');
+    await waitStreamingIdle(cdp, 30000);
+    await sleep(350);
+
+    const freshRows = seed.query(dbPath,
+      'SELECT role, content FROM messages WHERE thread_id=? ORDER BY rowid', [freshThread]);
+    if (freshRows.length !== 2 || freshRows[0].role !== 'user' ||
+        freshRows[1].role !== 'assistant' || String(freshRows[1].content).trim() !== 'BASIC CODEX ANSWER')
+      throw new Error('fresh chat did not complete cleanly after ceiling failure: ' + JSON.stringify(freshRows));
+
+    const missingOriginError = await cdp.eval(
+      'document.body && document.body.textContent.indexOf("originating stream record is missing") >= 0'
+    );
+    if (missingOriginError)
+      throw new Error('stale stream tool state leaked into the fresh Codex request');
+    if (execLog(dataDir).length !== 1)
+      throw new Error('fresh chat should execute Codex exactly once after the failed search loop');
+
+    return '61 requested search rounds hit the bounded max 60 terminal path; ownership released, then a brand-new Codex thread completed and persisted without stale originating-stream state';
+  }
+});
+
+scenarios.push({
+  id: 343,
+  name: 'Switching sibling branches during a non-stream Codex request keeps live activity and persistence on the originating branch',
+  regression: true,
+  mode: null,
+  settings: { threadTitles: { enabled: false } },
+  fixtures: {
+    threads: [{
+      id: 't-codex-branch-343', title: 'Codex Branch Scope', active_leaf_id: 'm-codex-branch-343-a2a',
+      model_override: 'codex/gpt-5.6-luna', reasoning_override: 'medium', reasoning_override_set: 1
+    }],
+    messages: [
+      { id: 'm-codex-branch-343-u1', thread_id: 't-codex-branch-343', role: 'user', content: 'shared root' },
+      { id: 'm-codex-branch-343-a1', thread_id: 't-codex-branch-343', role: 'assistant', content: 'branch A answer', parent_id: 'm-codex-branch-343-u1', sibling_group: 'sg-codex-343', sibling_index: 0, model: 'codex/gpt-5.6-luna' },
+      { id: 'm-codex-branch-343-a1b', thread_id: 't-codex-branch-343', role: 'assistant', content: 'branch B answer', parent_id: 'm-codex-branch-343-u1', sibling_group: 'sg-codex-343', sibling_index: 1, model: 'codex/gpt-5.6-luna' },
+      { id: 'm-codex-branch-343-u2a', thread_id: 't-codex-branch-343', role: 'user', content: 'follow A', parent_id: 'm-codex-branch-343-a1' },
+      { id: 'm-codex-branch-343-a2a', thread_id: 't-codex-branch-343', role: 'assistant', content: 'A leaf', parent_id: 'm-codex-branch-343-u2a', model: 'codex/gpt-5.6-luna' },
+      { id: 'm-codex-branch-343-u2b', thread_id: 't-codex-branch-343', role: 'user', content: 'follow B', parent_id: 'm-codex-branch-343-a1b' },
+      { id: 'm-codex-branch-343-a2b', thread_id: 't-codex-branch-343', role: 'assistant', content: 'B leaf', parent_id: 'm-codex-branch-343-u2b', model: 'codex/gpt-5.6-luna' }
+    ]
+  },
+  preLaunch(dataDir) { installFakeCodex(dataDir); },
+  launchEnv: fakeLaunchEnv,
+  async body({ cdp, dbPath, dataDir }) {
+    const buttonMode = '(() => { const b = document.getElementById("chat-send-btn"); if (!b || !b.onclick) return "none"; if (b.onclick === onStopStreaming) return "stop"; if (b.onclick === onChatSend) return "send"; return "other"; })()';
+
+    await showChat();
+    await cdp.eval('window.loadThread("t-codex-branch-343"); true');
+    await cdp.waitFor(
+      'window.activeThreadId === "t-codex-branch-343" && chatMessages[chatMessages.length - 1] && chatMessages[chatMessages.length - 1].id === "m-codex-branch-343-a2a"',
+      15000, 250, 'Codex branch A loaded'
+    );
+
+    await sendChatMessage(cdp, 'slow branch codex');
+    await cdp.waitFor(
+      '(() => { const el = document.querySelector("#chat-messages .thinking-block .thinking-content"); return !!el && el.textContent.indexOf("Working on the originating Codex branch") >= 0; })()',
+      15000, 100, 'originating branch Codex reasoning visible'
+    );
+    const sentUser = seed.query(dbPath,
+      "SELECT id FROM messages WHERE thread_id='t-codex-branch-343' AND role='user' AND content='slow branch codex' ORDER BY rowid DESC LIMIT 1")[0];
+    if (!sentUser)
+      throw new Error('originating Codex user message was not persisted');
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Next branch"]');
+    await cdp.waitFor(
+      'chatMessages[chatMessages.length - 1] && chatMessages[chatMessages.length - 1].id === "m-codex-branch-343-a2b"',
+      15000, 200, 'Codex branch B loaded while A runs'
+    );
+    await sleep(250);
+
+    const offPath = await cdp.eval('(() => { const b = document.getElementById("chat-send-btn"); return { busy: typeof isThreadRequestInFlight === "function" && isThreadRequestInFlight("t-codex-branch-343"), inputDisabled: document.getElementById("chat-input").disabled, buttonMode: !b || !b.onclick ? "none" : (b.onclick === onStopStreaming ? "stop" : (b.onclick === onChatSend ? "send" : "other")), loadingDots: !!document.getElementById("chat-loading"), text: document.getElementById("chat-messages").textContent }; })()');
+    if (!offPath.busy || !offPath.inputDisabled || offPath.buttonMode !== 'stop')
+      throw new Error('same-thread Codex request lost its busy/Stop ownership after branch switch: ' + JSON.stringify(offPath));
+    if (offPath.loadingDots || String(offPath.text).indexOf('Working on the originating Codex branch') >= 0)
+      throw new Error('originating Codex loading/activity painted into sibling branch B: ' + JSON.stringify(offPath));
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Previous branch"]');
+    await cdp.waitFor(
+      'chatMessages.some((m) => m.content === "slow branch codex")',
+      15000, 200, 'returned to originating Codex branch'
+    );
+    await cdp.waitFor(
+      '(() => { const el = document.querySelector("#chat-messages .thinking-block .thinking-content"); return !!el && el.textContent.indexOf("Working on the originating Codex branch") >= 0; })()',
+      10000, 100, 'originating Codex activity restored'
+    );
+    const originBusy = await cdp.eval(buttonMode);
+    if (originBusy !== 'stop')
+      throw new Error('returning to the originating branch did not restore Stop state: ' + originBusy);
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Next branch"]');
+    await cdp.waitFor(
+      'chatMessages[chatMessages.length - 1] && chatMessages[chatMessages.length - 1].id === "m-codex-branch-343-a2b"',
+      15000, 200, 'returned to sibling B before Codex completion'
+    );
+    await waitStreamingIdle(cdp, 30000);
+    await sleep(350);
+
+    const assistantRows = seed.query(dbPath,
+      "SELECT id, parent_id, content, reasoning FROM messages WHERE thread_id='t-codex-branch-343' AND role='assistant'");
+    const responseRows = assistantRows.filter((row) =>
+      String(row.content || '').trim() === 'ORIGINATING BRANCH CODEX ANSWER'
+    );
+    if (responseRows.length !== 1 || responseRows[0].parent_id !== sentUser.id)
+      throw new Error('Codex completion did not persist under the originating send path: ' +
+        JSON.stringify({ sentUser, responseRows, assistantRows, execs: execLog(dataDir) }));
+    const activeLeaf = seed.query(dbPath,
+      "SELECT active_leaf_id FROM chat_threads WHERE id='t-codex-branch-343'")[0].active_leaf_id;
+    if (activeLeaf !== 'm-codex-branch-343-a2b')
+      throw new Error('background Codex completion yanked the visible branch: active_leaf_id=' + activeLeaf);
+
+    const after = await cdp.eval('(() => { const b = document.getElementById("chat-send-btn"); return { lastId: chatMessages.length ? chatMessages[chatMessages.length - 1].id : "", text: document.getElementById("chat-messages").textContent, loadingDots: !!document.getElementById("chat-loading"), inputDisabled: document.getElementById("chat-input").disabled, buttonMode: !b || !b.onclick ? "none" : (b.onclick === onStopStreaming ? "stop" : (b.onclick === onChatSend ? "send" : "other")) }; })()');
+    if (after.lastId !== 'm-codex-branch-343-a2b' ||
+        String(after.text).indexOf('ORIGINATING BRANCH CODEX ANSWER') >= 0 ||
+        String(after.text).indexOf('Working on the originating Codex branch') >= 0 ||
+        after.loadingDots || after.inputDisabled || after.buttonMode !== 'send')
+      throw new Error('background Codex completion altered sibling branch B UI/composer: ' + JSON.stringify(after));
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Previous branch"]');
+    await cdp.waitFor(
+      'document.getElementById("chat-messages").textContent.indexOf("ORIGINATING BRANCH CODEX ANSWER") >= 0',
+      15000, 200, 'originating Codex final visible after switching back'
+    );
+    if (execLog(dataDir).length !== 1)
+      throw new Error('branch navigation must not start another Codex process');
+
+    return 'Codex ran on branch A; branch B showed no A loading/activity, switching back restored A busy activity, background completion stayed parented to A and did not yank B';
+  }
+});
 module.exports = scenarios;

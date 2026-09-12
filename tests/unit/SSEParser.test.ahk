@@ -57,6 +57,12 @@ class SSEParserTest {
             throw Error("null choice must not hide valid simultaneous content")
     }
 
+    ParseLine_JsonScalar_IsIgnoredSafely() {
+        chunk := SSEParser.ParseLine('data: "embedded scalar text"')
+        if chunk.type != "ignore"
+            throw Error("JSON scalar SSE payload must be ignored safely, got " chunk.type)
+    }
+
     ParseLine_ToolCallFinish_CarriesReason() {
         chunk := SSEParser.ParseLine('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"model":"deepseek-v4-flash","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}')
         if chunk.type != "finish" || chunk.reason != "tool_calls"

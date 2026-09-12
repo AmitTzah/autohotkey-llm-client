@@ -13,7 +13,8 @@
 class SearchTools {
 
     static TOOL_NAME := "web_search"
-    static MAX_TOOL_ITERATIONS := 6
+    ; Keep a finite runaway guard, but allow legitimately deep agent searches.
+    static MAX_TOOL_ITERATIONS := 60
 
     ; OpenAI-compatible function-tool definition sent to every provider when
     ; the per-thread Web Search toggle is on.

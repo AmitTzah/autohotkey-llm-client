@@ -23,10 +23,13 @@ function initChatMode(data) {
   var messages = Array.isArray(data) ? data : (data && data.messages ? data.messages : []);
   chatMessages = messages;
 
-  // When re-showing an in-flight stream after a thread/branch switch,
-  // back to its sender), drop the existing incremental UI buffers - the AHK layer
-  // re-posts the full accumulated partial via _RepostActiveStreamForThread.
-  if (typeof streamState !== 'undefined' && streamState.active) {
+  // The single DOM streamState belongs only to the visible chat. On every
+  // thread load, clear it; the AHK layer re-posts that thread's accumulated
+  // partial via _RepostActiveStreamForThread when it actually has a stream.
+  if (typeof streamState !== 'undefined') {
+    streamState.active = false;
+    streamState.finalized = false;
+    streamState.threadId = '';
     streamState.contentBuffer = '';
     streamState.thinkingBuffer = '';
     streamState.bubble = null;
@@ -51,20 +54,16 @@ function initChatMode(data) {
 
   renderChatMessages(chatMessages);
   showTokenUsageBar();
-  // A thread switch must not reset loading/input state while a request is in flight.
-  // unconditionally re-enable the input and reset isLoading to false while
-  // the existing stream was still active (editable input + Send path + Stop
-  // button), letting Enter fire a second request that clobbers the first
-  // stream. Sync the composer to the in-flight state instead: Stop mode
-  // (disabled input, isLoading stays true) for the whole window (isLoading
-  // covers the pre-stream phase, streamState.active the streaming phase),
-  // Send mode otherwise. setChatButtonsEnabled also re-enables the
-  // input/button when coming back from trash view.
-  var requestInFlight = isLoading || (typeof streamState !== 'undefined' && streamState.active);
-  setChatButtonsEnabled(!requestInFlight);
+  // Composer state follows the loaded thread only; background generations are
+  // tracked independently in chat-input.js.
+  if (typeof syncChatButtonsForActiveThread === 'function') syncChatButtonsForActiveThread();
 
-  // Only show loading if a request is already in-flight AND last message isn't assistant
-  if (isLoading && chatMessages.length > 0 && chatMessages[chatMessages.length - 1].role !== 'assistant') {
+  // Only show loading if THIS thread already has a request in-flight and the
+  // last persisted message is not yet an assistant response.
+  if (typeof isThreadRequestInFlight === 'function' &&
+      isThreadRequestInFlight(activeThreadId) &&
+      chatMessages.length > 0 &&
+      chatMessages[chatMessages.length - 1].role !== 'assistant') {
     showLoadingIndicator();
   } else {
     hideLoadingIndicator();

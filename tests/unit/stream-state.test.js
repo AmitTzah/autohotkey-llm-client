@@ -20,6 +20,7 @@ function loadStreamModule() {
         escHtml: (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
         setTimeout: setTimeout, clearTimeout: clearTimeout,
         chatMessages: [],
+        activeThreadId: '',
         sessionStorage: { getItem: () => null, setItem: () => {} },
         streamState: undefined,
         scrollToBottom: undefined, startStreaming: undefined, onStreamContent: undefined,
@@ -30,10 +31,14 @@ function loadStreamModule() {
         markedCompletedThreads: [],
         markThreadCompleted: (threadId) => sandbox.markedCompletedThreads.push(threadId),
         hideLoadingIndicator: () => {},
-        // Mirrors production: enabling the composer clears any visible
-        // loading dots (bug #215) and fully resets the stream state (bug
-        // #219) - the stream-level tests below rely on it.
-        setChatButtonsEnabled: (enabled) => {
+        // Mirrors production's thread-scoped composer updates. A background
+        // chat completing must not clear the visible chat's stream DOM state.
+        setChatButtonsEnabled: (state) => {
+            const enabled = state && typeof state === 'object' ? !!state.enabled : !!state;
+            const threadId = state && typeof state === 'object' && state.threadId !== undefined
+                ? String(state.threadId || '')
+                : String(sandbox.activeThreadId || '');
+            if (threadId !== String(sandbox.activeThreadId || '')) return;
             if (enabled) {
                 sandbox.hideLoadingIndicator();
                 if (sandbox.streamState) {
@@ -166,6 +171,44 @@ describe('Codex activity UX', () => {
         assert.strictEqual(ctx.streamState.thinkingKind, 'activity');
         assert.strictEqual(ctx.streamState.activitySearchCount, 1);
         assert.ok(summary.innerHTML.includes('1 web search'));
+    });
+
+    it('rebuilds detached branch activity DOM from an explicit repost snapshot', () => {
+        const ctx = loadStreamModule();
+        ctx.activeThreadId = 't1';
+        const detachedContent = { textContent: '' };
+        const detachedSummary = { innerHTML: '' };
+        const detachedDetails = {
+            isConnected: false,
+            open: true,
+            querySelector: (sel) => sel === 'summary' ? detachedSummary : detachedContent,
+        };
+        const liveContent = { textContent: '' };
+        const liveSummary = { innerHTML: '' };
+        const liveDetails = {
+            isConnected: true,
+            open: true,
+            querySelector: (sel) => sel === 'summary' ? liveSummary : liveContent,
+        };
+        ctx.streamState.active = true;
+        ctx.streamState.threadId = 't1';
+        ctx.streamState.bubble = { isConnected: false };
+        ctx.streamState.thinkingDetails = detachedDetails;
+        ctx.streamState.thinkingBuffer = 'old detached text';
+        ctx.createThinkingBlock = () => liveDetails;
+
+        ctx.onStreamReasoning({
+            content: 'restored branch activity',
+            kind: 'reasoning',
+            replace: true,
+            repost: true,
+            threadId: 't1',
+        }, 't1');
+
+        assert.strictEqual(ctx.streamState.thinkingDetails, liveDetails);
+        assert.strictEqual(ctx.streamState.thinkingBuffer, 'restored branch activity');
+        assert.strictEqual(liveContent.textContent, 'restored branch activity');
+        assert.strictEqual(detachedContent.textContent, '');
     });
 
     it('uses persisted one-shot content when activity opened the bubble before completion', () => {
@@ -407,6 +450,36 @@ describe('onStreamDone thread scoping (bug #195)', () => {
         ctx.setChatButtonsEnabled(true);
         assert.strictEqual(ctx.streamState.active, false);
         assert.ok(hidden > 0, 'enabling the composer must clear the visible loading dots');
+    });
+});
+
+describe('cross-thread retry isolation', () => {
+    it('does not clear chat B retry recovery when chat A completes or is cancelled', () => {
+        const ctx = loadStreamModule();
+        ctx.activeThreadId = 't-B';
+        ctx.chatMessages = [{ id: 'b-user', role: 'user', content: 'B question' }];
+        ctx._retryRemovedMessages = [{ id: 'b-old-answer', role: 'assistant', content: 'old' }];
+        ctx._retryThreadId = 't-B';
+        ctx._retryAnchorId = 'b-user';
+        ctx.streamState.active = true;
+        ctx.streamState.contentBuffer = 'B partial';
+        ctx.streamState.thinkingBuffer = '';
+        ctx.streamState.modelName = 'm';
+
+        ctx.onStreamDone({
+            model: 'm',
+            threadId: 't-A',
+            dbMsg: { id: 'a-answer', parentId: 'a-user' }
+        });
+        assert.strictEqual(ctx._retryThreadId, 't-B');
+        assert.strictEqual(ctx._retryRemovedMessages.length, 1);
+
+        ctx.cancelStreaming({
+            threadId: 't-A',
+            dbMsg: { id: 'a-partial', parentId: 'a-user' }
+        });
+        assert.strictEqual(ctx._retryThreadId, 't-B');
+        assert.strictEqual(ctx._retryRemovedMessages.length, 1);
     });
 });
 

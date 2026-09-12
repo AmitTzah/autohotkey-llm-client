@@ -243,6 +243,7 @@ class StreamErrorTest {
         requestParams["_streamOutputFile"] := outFile
         requestParams["_streamRequestStartTime"] := 0
         requestParams["_streamProviderKey"] := "deepseek"
+        requestParams["_streamThreadId"] := "thread-error-test"
         requestParams["windowTitle"] := "test"
         requestParams["providerName"] := "deepseek"
         requestParams["singleAPIModelName"] := "deepseek/deepseek-v4-flash"
@@ -263,8 +264,10 @@ class StreamErrorTest {
         for _, json in captured {
             if InStr(json, '"target":"showError"') && InStr(json, "Connection refused")
                 hasError := true
-            ; jsongo.Stringify encodes the boolean true as 1.
-            if InStr(json, '"target":"setChatButtonsEnabled"') && InStr(json, '"data":1')
+            ; Composer state is now an object scoped to the request-owning thread.
+            if InStr(json, '"target":"setChatButtonsEnabled"')
+                && InStr(json, '"enabled":1')
+                && InStr(json, '"threadId":"thread-error-test"')
                 hasReenable := true
         }
         if !hasError
@@ -462,7 +465,7 @@ class StreamErrorTest {
 
     CancelStream_FinalizesBeforeComposerReenable() {
         src := FileRead(A_ScriptDir "\..\chat\streaming\StreamError.ahk")
-        cancelStart := InStr(src, "handleCancelStream() {")
+        cancelStart := InStr(src, "handleCancelStream(")
         cancelEnd := InStr(src, "_logCancelledRequest() {", false, cancelStart)
         cancelBlock := SubStr(src, cancelStart, cancelEnd - cancelStart)
         if InStr(cancelBlock, 'if !_HasOtherActiveOperations("", stream)') && InStr(cancelBlock, 'postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)')
@@ -472,9 +475,9 @@ class StreamErrorTest {
         finalizeEnd := InStr(src, "; Called by Dispatch.ahk", false, finalizeStart)
         finalizeBlock := SubStr(src, finalizeStart, finalizeEnd - finalizeStart)
         cancelledPos := InStr(finalizeBlock, 'postWebMessage("streamCancelled"')
-        enablePos := InStr(finalizeBlock, 'postWebMessage("setChatButtonsEnabled", true)')
+        enablePos := InStr(finalizeBlock, "_MaybeEnableThreadComposer(streamThreadId")
         if !cancelledPos || !enablePos || cancelledPos > enablePos
-            throw Error("streamCancelled must be posted before the composer is re-enabled")
+            throw Error("streamCancelled must be posted before the owning thread's composer is re-enabled")
     }
 
     PartialPersist_RefreshesSidebar() {

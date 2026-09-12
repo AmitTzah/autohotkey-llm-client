@@ -96,8 +96,11 @@ function loadRenderModule() {
         },
         console: console,
         chatMessages: [],
+        activeThreadId: 't1',
         isLoading: false,
         streamState: { active: false },
+        _threadBusy: false,
+        syncChatButtonsForActiveThread: () => { sandbox._lastButtonsEnabled = !sandbox._threadBusy; },
         setChatButtonsEnabled: (enabled) => { sandbox._lastButtonsEnabled = enabled; },
         md: { render: (c) => '<p>' + c + '</p>' },
         sessionStorage: { getItem: () => null, setItem: () => {} },
@@ -676,25 +679,26 @@ describe('replaceMessagesAfter preserves thinking block state', () => {
 });
 
 describe('updateChatMessages composer state (bug #214)', () => {
-    it('keeps the composer disabled while a stream is in flight', () => {
+    it('keeps the visible thread disabled when that thread is busy', () => {
         const ctx = loadRenderModule();
-        ctx.streamState = { active: true };
+        ctx._threadBusy = true;
         ctx.updateChatMessages([{ role: 'user', content: 'q', id: 'u1' }]);
-        assert.strictEqual(ctx._lastButtonsEnabled, false, 'a branch switch mid-stream must not re-enable the composer');
+        assert.strictEqual(ctx._lastButtonsEnabled, false, 'rerender must preserve this thread\'s Stop state');
     });
 
-    it('keeps the composer disabled during the pre-stream phase (isLoading, no stream content yet)', () => {
+    it('does not derive composer state from the window-global stream object', () => {
         const ctx = loadRenderModule();
-        ctx.streamState = { active: false };
+        ctx._threadBusy = false;
+        ctx.streamState = { active: true }; // may belong to a previously visible chat
         ctx.isLoading = true;
         ctx.updateChatMessages([{ role: 'user', content: 'q', id: 'u1' }]);
-        assert.strictEqual(ctx._lastButtonsEnabled, false, 'an in-flight request must keep the composer disabled');
+        assert.strictEqual(ctx._lastButtonsEnabled, true,
+            'the visible thread state, not stale global stream/isLoading flags, must control the composer');
     });
 
-    it('re-enables the composer when idle', () => {
+    it('re-enables the visible thread when its scoped state is idle', () => {
         const ctx = loadRenderModule();
-        ctx.streamState = { active: false };
-        ctx.isLoading = false;
+        ctx._threadBusy = false;
         ctx.updateChatMessages([{ role: 'user', content: 'q', id: 'u1' }]);
         assert.strictEqual(ctx._lastButtonsEnabled, true);
     });

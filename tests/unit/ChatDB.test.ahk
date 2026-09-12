@@ -583,6 +583,37 @@ class ChatDBTest {
     }
 
     ; --------------------
+    GetSiblings_FiltersMalformedCrossParentGroup() {
+        threadId := this._setup()
+        u1 := ChatDB.Msg_Insert({thread_id: threadId, role: "user", content: "root"})
+        a1 := ChatDB.Msg_Insert({
+            thread_id: threadId, role: "assistant", content: "first answer",
+            parent_id: u1, sibling_group: "malformed-group", sibling_index: 0
+        })
+        u2 := ChatDB.Msg_Insert({thread_id: threadId, role: "user", content: "follow-up", parent_id: a1})
+        a2 := ChatDB.Msg_Insert({
+            thread_id: threadId, role: "assistant", content: "second unrelated answer",
+            parent_id: u2, sibling_group: "malformed-group", sibling_index: 1
+        })
+
+        firstSiblings := ChatDB.Msg_GetSiblings(a1)
+        secondSiblings := ChatDB.Msg_GetSiblings(a2)
+        if firstSiblings.Length != 1 || firstSiblings[1].id != a1
+            throw Error("cross-parent row was exposed as a sibling of the first answer")
+        if secondSiblings.Length != 1 || secondSiblings[1].id != a2
+            throw Error("cross-parent row was exposed as a sibling of the second answer")
+
+        ChatDB.Msg_SetActiveLeaf(threadId, a2)
+        result := ChatDB.Msg_SwitchBranch(threadId, a2, -1)
+        if result.siblingInfo.total != 1
+            throw Error("malformed cross-parent group rendered branch navigation total=" result.siblingInfo.total)
+        leaf := ChatDB.db.Query("SELECT active_leaf_id FROM chat_threads WHERE id=?;", threadId)
+        if leaf[1, "active_leaf_id"] != a2
+            throw Error("malformed group branch switch changed the active leaf")
+
+        this._teardown()
+    }
+
     ; Msg_SwitchBranch
     ; --------------------
 

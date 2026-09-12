@@ -64,10 +64,7 @@ _handleStreamError() {
     ; The finishing stream is still registered here, so exclude it while
     ; checking all other streams, search loops, and non-stream requests.
     currentStream := _FindStreamByKey(_currentStreamKey)
-    if !_HasOtherActiveOperations("", currentStream) {
-        postWebMessage("setChatButtonsEnabled", true)
-        startLoadingCursor(false)
-    }
+    _MaybeEnableThreadComposer(streamThreadId, "", currentStream)
 
     responseTimeMs := requestParams["_streamRequestStartTime"] > 0
         ? A_TickCount - requestParams["_streamRequestStartTime"]
@@ -93,12 +90,10 @@ _handleStreamError() {
 
     } catch Error as e {
         debugLog("_handleStreamError crashed: " e.Message "`n" e.Stack, "ErrorHandler")
-        _PostChatError("Request failed: " e.Message, IsSet(streamThreadId) ? streamThreadId : activeThreadId)
+        errorThreadId := IsSet(streamThreadId) ? streamThreadId : activeThreadId
+        _PostChatError("Request failed: " e.Message, errorThreadId)
         currentStream := _FindStreamByKey(_currentStreamKey)
-        if !_HasOtherActiveOperations("", currentStream) {
-            postWebMessage("setChatButtonsEnabled", true)
-            startLoadingCursor(false)
-        }
+        _MaybeEnableThreadComposer(errorThreadId, "", currentStream)
         deleteTempFiles()
     }
 }
@@ -128,6 +123,7 @@ _persistPartialStreamContent() {
     if !isRootRetry && !parentId && path.Length
         parentId := path[path.Length].id
     retrySiblingGroup := requestParams.Has("pendingRetrySiblingGroup") ? requestParams["pendingRetrySiblingGroup"] : ""
+    retrySiblingGroup := _ValidatedRetrySiblingGroup(streamThreadId, parentId, retrySiblingGroup)
     retrySiblingIdx := retrySiblingGroup ? MessageRepo.GetMaxSiblingIndex(retrySiblingGroup) + 1 : 0
     if retrySiblingGroup
         requestParams.Delete("pendingRetrySiblingGroup")
@@ -177,41 +173,36 @@ _handleStreamCancelled() {
     ; The finishing stream is still registered here, so exclude it while
     ; checking all other streams, search loops, and non-stream requests.
     currentStream := _FindStreamByKey(_currentStreamKey)
-    if !_HasOtherActiveOperations("", currentStream) {
-        startLoadingCursor(false)
-        postWebMessage("setChatButtonsEnabled", true)
-    }
+    _MaybeEnableThreadComposer(streamThreadId, "", currentStream)
 
     } catch Error as e {
         debugLog("_handleStreamCancelled crashed: " e.Message "`n" e.Stack, "ErrorHandler")
         _cleanupStreamState()
         deleteTempFiles()
+        errorThreadId := IsSet(streamThreadId) ? streamThreadId : activeThreadId
         currentStream := _FindStreamByKey(_currentStreamKey)
-        if !_HasOtherActiveOperations("", currentStream) {
-            startLoadingCursor(false)
-            postWebMessage("setChatButtonsEnabled", true)
-        }
-        _PostChatError("Cancellation error: " e.Message, IsSet(streamThreadId) ? streamThreadId : activeThreadId)
+        _MaybeEnableThreadComposer(errorThreadId, "", currentStream)
+        _PostChatError("Cancellation error: " e.Message, errorThreadId)
     }
 }
 
 ; Called by Dispatch.ahk (cancelStream action) when user clicks stop.
 ; Kills the cURL process and sets the cancelled flag — the streaming
 ; poll timer will detect the flag on its next tick and finalize.
-handleCancelStream() {
+handleCancelStream(threadId := "") {
     try {
+    targetThreadId := threadId ? threadId : activeThreadId
     ; Web-search round in flight: the PID and cancellation flag belong to the
     ; originating request's loop state, so cancelling thread B cannot kill A.
-    loopState := _FindToolLoopForThread(activeThreadId)
+    loopState := _FindToolLoopForThread(targetThreadId)
     if loopState {
         SearchTools.CancelProcess(loopState)
         ; The loop remains registered until its synchronous handler resumes;
         ; exclude it while checking whether another operation is active.
-        if !_HasOtherActiveOperations(loopState)
-            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+        _MaybeEnableThreadComposer(targetThreadId, loopState)
         return
     }
-    initialRequest := _FindNonStreamRequestForThread(activeThreadId)
+    initialRequest := _FindNonStreamRequestForThread(targetThreadId)
     if initialRequest {
         CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.enter")
         if initialRequest.HasOwnProp("transport") && initialRequest.transport = "codex-cli" {
@@ -226,20 +217,18 @@ handleCancelStream() {
         CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.kill.begin")
         SearchTools.CancelProcess(initialRequest)
         CodexCliTransport._Trace(initialRequest, "ahk.cancel.nonstream.kill.returned")
-        if !_HasOtherActiveOperations("", "", initialRequest)
-            postWebMessage("setChatButtonsEnabled", true), startLoadingCursor(false)
+        _MaybeEnableThreadComposer(targetThreadId, "", "", initialRequest)
         return
     }
     ; Cancel the request associated with the current thread;
     ; concurrent command streams there is no single global cURL PID. Fall back
     ; to the most recent stream only when there is no visible thread (legacy
     ; flows); never cancel another thread's active request.
-    stream := _FindLatestStreamForThread(activeThreadId)
-    if !stream && !activeThreadId && _activeStreams.Length
+    stream := _FindLatestStreamForThread(targetThreadId)
+    if !stream && !targetThreadId && _activeStreams.Length
         stream := _activeStreams[_activeStreams.Length]
     if !stream {
-        if !_HasOtherActiveOperations()
-            postWebMessage("setChatButtonsEnabled", true)
+        _MaybeEnableThreadComposer(targetThreadId)
         return
     }
     _LoadStreamIntoParams(stream)
@@ -267,8 +256,8 @@ handleCancelStream() {
     ; the composer after streamCancelled has been posted.
     } catch Error as e {
         debugLog("handleCancelStream error: " e.Message "`n" e.Stack, "ErrorHandler")
-        if !_HasOtherActiveOperations()
-            postWebMessage("setChatButtonsEnabled", true)
+        errorThreadId := IsSet(targetThreadId) ? targetThreadId : activeThreadId
+        _MaybeEnableThreadComposer(errorThreadId)
     }
 }
 

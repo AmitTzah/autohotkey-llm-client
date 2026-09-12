@@ -259,7 +259,7 @@ if prewarming {
 if (A_Args.Length >= 2 && A_Args[2] != "" && A_Args[2] != "prewarm") {
     LoadThreadIntoUI(A_Args[2], true)  ; autoFire=true for command-line-arg path
     Sleep 500
-    postWebMessage("setChatButtonsEnabled", true)
+    postWebMessage("setChatButtonsEnabled", { enabled: !_HasActiveOperationForUi(activeThreadId), threadId: activeThreadId })
     if requestParams["mainScriptHiddenHwnd"]
         CustomMessages.notifyThreadLoaded(requestParams["mainScriptHiddenHwnd"])
 }

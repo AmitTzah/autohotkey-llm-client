@@ -13,6 +13,38 @@ var _retryRemovedMessages = null;
 var _retryThreadId = null;
 var _retryAnchorId = null;
 
+// In-flight request ownership is per thread. A request in chat A must not put
+// chat B's composer into Stop mode or block retries/edits there.
+var _threadRequestState = Object.create(null);
+
+function _threadRequestKey(threadId) {
+  return String(threadId || '__new_chat__');
+}
+
+function isThreadRequestInFlight(threadId) {
+  return !!_threadRequestState[_threadRequestKey(threadId)];
+}
+
+function _setThreadRequestInFlight(threadId, inFlight) {
+  var rawThreadId = String(threadId || '');
+  var key = _threadRequestKey(rawThreadId);
+
+  // The first send of a brand-new chat starts before AHK assigns its durable
+  // thread id. As soon as a real thread state arrives, retire that provisional
+  // owner so a later blank New Chat never inherits stale Stop state.
+  if (rawThreadId) delete _threadRequestState.__new_chat__;
+
+  if (inFlight) _threadRequestState[key] = true;
+  else delete _threadRequestState[key];
+}
+
+function syncChatButtonsForActiveThread() {
+  setChatButtonsEnabled({
+    enabled: !isThreadRequestInFlight(typeof activeThreadId !== 'undefined' ? activeThreadId : ''),
+    threadId: typeof activeThreadId !== 'undefined' ? activeThreadId : ''
+  });
+}
+
 // Correlated Send -> first-visible-response latency trace. Browser timings use
 // performance.now() so they are monotonic; the trace id is forwarded to AHK so
 // backend debug-log stages can be matched without logging prompt contents.
@@ -49,11 +81,9 @@ function onChatSend() {
   var input = document.getElementById('chat-input');
   if (!input) return;
 
-  // If streaming, treat click as "Stop". streamState.active is checked in
-  // addition to isLoading so a mismatched composer cannot send again while
-  // the first stream is still in flight, preventing a second send from
-  // clobbering the active stream.
-  if (isLoading || (typeof streamState !== 'undefined' && streamState.active)) {
+  // Stop only the request owned by the visible thread. Other chats may stream
+  // concurrently without changing this composer's Send behavior.
+  if (isThreadRequestInFlight(typeof activeThreadId !== 'undefined' ? activeThreadId : '')) {
     onStopStreaming();
     return;
   }
@@ -82,11 +112,10 @@ function onChatSend() {
     }
     input.value = '';
     input.style.height = 'auto';
-    isLoading = true;
+    setChatButtonsEnabled({ enabled: false, threadId: typeof activeThreadId !== 'undefined' ? activeThreadId : '' });
     showLoadingIndicator();
     var sendBtn = document.getElementById('chat-send-btn');
     if (sendBtn) sendBtn.disabled = true;
-    input.disabled = true;
     var payload = { message: message || 'Describe the attached content.' };
     if (attachments.length > 0) payload.attachments = attachments;
     payload.latencyTraceId = latencyTrace.id;
@@ -122,7 +151,20 @@ function hideLoadingIndicator() {
 }
 
 // Enable/disable chat input. During streaming, button shows "Stop" to cancel.
-function setChatButtonsEnabled(enabled) {
+function setChatButtonsEnabled(state) {
+  var enabled = (state && typeof state === 'object')
+    ? !(state.enabled === false || state.enabled === 0 || state.enabled === '0')
+    : !!state;
+  var threadId = (state && typeof state === 'object' && state.threadId !== undefined)
+    ? String(state.threadId || '')
+    : (typeof activeThreadId !== 'undefined' ? String(activeThreadId || '') : '');
+
+  _setThreadRequestInFlight(threadId, !enabled);
+
+  // Background-thread updates are recorded but never repaint this composer.
+  var visibleThreadId = typeof activeThreadId !== 'undefined' ? String(activeThreadId || '') : '';
+  if (threadId !== visibleThreadId) return;
+
   isLoading = !enabled;
   var sendBtn = document.getElementById('chat-send-btn');
   var input = document.getElementById('chat-input');
@@ -171,12 +213,12 @@ function setChatButtonsEnabled(enabled) {
 
 // Cancel streaming — sends cancel message to AHK
 function onStopStreaming() {
-  Ipc.postToHost('cancelStream');
+  Ipc.postToHost('cancelStream', { threadId: typeof activeThreadId !== 'undefined' ? activeThreadId : '' });
 }
 
 // Retry an assistant message
 function retryLastAssistantMessage(messageId) {
-  if (isLoading) return;
+  if (isThreadRequestInFlight(typeof activeThreadId !== 'undefined' ? activeThreadId : '')) return;
 
   _retryRemovedMessages = null;
   _retryThreadId = typeof activeThreadId !== 'undefined' ? activeThreadId : '';
@@ -200,12 +242,11 @@ function retryLastAssistantMessage(messageId) {
   }
   _retryAnchorId = chatMessages.length ? chatMessages[chatMessages.length - 1].id : null;
 
-  isLoading = true;
+  setChatButtonsEnabled({ enabled: false, threadId: typeof activeThreadId !== 'undefined' ? activeThreadId : '' });
   showLoadingIndicator();
   var sendBtn = document.getElementById('chat-send-btn');
   var input = document.getElementById('chat-input');
   if (sendBtn) sendBtn.disabled = true;
-  if (input) input.disabled = true;
 
   var payload = {};
   if (messageId) payload.messageId = messageId;

@@ -19,6 +19,9 @@ handleBranchSwitch(params, *) {
     ; list so its order and model badge follow the newly active
     ; branch instead of staying stale until some other action reposts it.
     _postThreadListRefresh()
+    ; Branch navigation does not use the full thread-loader path, so explicitly
+    ; restore any in-flight request that belongs to the newly selected path.
+    _RepostActiveStreamForThread(activeThreadId)
 }
 
 ; ----------------------------------------------------

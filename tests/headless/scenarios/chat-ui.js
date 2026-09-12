@@ -874,7 +874,7 @@ scenarios.push({
       streamActive: (typeof streamState !== 'undefined' && streamState.active) || false,
       inputDisabled: document.getElementById('chat-input').disabled,
       isLoading: (typeof isLoading !== 'undefined' && isLoading) || false,
-      btnOnclick: (function(){ var b = document.getElementById('chat-send-btn'); return b && b.onclick ? String(b.onclick).indexOf('onStopStreaming') >= 0 ? 'stop' : 'send' : 'none'; })()
+      btnOnclick: (function(){ var b = document.getElementById('chat-send-btn'); if (!b || !b.onclick) return 'none'; if (b.onclick === onStopStreaming) return 'stop'; if (b.onclick === onChatSend) return 'send'; return 'other'; })()
     }))()`);
     if (!state.streamActive)
       throw new Error('setup: first stream already finished before the state check (timing)');
@@ -908,9 +908,9 @@ scenarios.push({
 
 scenarios.push({
   id: 215,
-  name: 'Switching to an unanswered thread mid-stream leaves the loading indicator stuck after the stream completes - initChatMode shows the dots for the visible thread\'s trailing user message (isLoading is still true), and onStreamDone (scoped away by bug #195 for a non-current thread) never calls hideLoadingIndicator',
+  name: 'Switching to an unanswered thread while another chat generates keeps the visible thread free of foreign loading/composer state',
   mode: 'sse-slow',
-  regression: true, // FIXED bug #215 kept as a regression check (completion clears the stuck dots)
+  regression: true, // Thread-scoped generation: background A must not show loading state in idle B.
   settings: {},
   fixtures: {
     threads: [
@@ -931,31 +931,37 @@ scenarios.push({
     await sendChatMessage(cdp, 'question for A');
     await cdp.waitFor('typeof streamState !== "undefined" && streamState.active === true', 20000, 50, 'streaming active');
     await sleep(150);
-    // Switch to thread B (which ends with an unanswered USER message) while
-    // A's stream is still in flight.
+
     await cdp.eval('window.loadThread("t-ui-b-215"); true');
     await cdp.waitFor('window.activeThreadId === "t-ui-b-215"', 15000, 300, 'thread B loaded');
     await sleep(400);
-    // BUG: initChatMode sees isLoading=true and B's last message is a user
-    // message, so it shows the loading dots in B's message list.
+
     const dotsDuring = await cdp.eval('document.getElementById("chat-loading") !== null');
-    if (!dotsDuring)
-      throw new Error('setup: loading dots not shown in B mid-stream (timing/flow changed): ' + dotsDuring);
-    // Wait for A's stream to finish. B is not the sending thread, so
-    // onStreamDone is scoped away (bug #195) and never hides the indicator.
+    const bStateDuring = await cdp.eval(`(() => ({
+      aBusy: typeof isThreadRequestInFlight === 'function' && isThreadRequestInFlight('t-ui-a-215'),
+      bBusy: typeof isThreadRequestInFlight === 'function' && isThreadRequestInFlight('t-ui-b-215'),
+      inputDisabled: document.getElementById('chat-input').disabled,
+      isLoading: (typeof isLoading !== 'undefined' && isLoading) || false,
+      btnOnclick: (function(){ var b = document.getElementById('chat-send-btn'); if (!b || !b.onclick) return 'none'; if (b.onclick === onStopStreaming) return 'stop'; if (b.onclick === onChatSend) return 'send'; return 'other'; })()
+    }))()`);
+
+    if (!bStateDuring.aBusy || bStateDuring.bBusy || bStateDuring.inputDisabled || bStateDuring.isLoading || bStateDuring.btnOnclick !== 'send')
+      throw new Error('idle B inherited A generation state: ' + JSON.stringify(bStateDuring));
+    if (dotsDuring)
+      throw new Error('background thread A leaked loading dots into idle B: ' + dotsDuring);
+
     await waitStreamingIdle(cdp, 40000);
     await sleep(700);
+
     const dotsAfter = await cdp.eval('document.getElementById("chat-loading") !== null');
     const streamIdle = await cdp.eval('typeof streamState !== "undefined" && !streamState.active');
     if (!streamIdle) throw new Error('setup: stream never went idle');
-    // FIXED (bug #215): once the stream completes, no request is in flight -
-    // the composer is re-enabled and the visible loading dots must clear,
-    // even though onStreamDone was scoped away for the non-current thread.
     if (dotsAfter)
-      throw new Error('loading indicator is still visible after the stream completed (bug #215 not fixed)');
-    return 'switched to unanswered thread B mid-stream: loading dots shown while streaming=' + dotsDuring +
-      ', after A\'s stream completed (streamState.active=false) the dots are hidden in B=' + !dotsAfter +
-      ' - completion of the non-current stream clears the stuck indicator';
+      throw new Error('loading indicator is still visible after the background stream completed');
+
+    return 'switched to unanswered thread B while A generated: foreign loading dots=' + dotsDuring +
+      ', B stayed Send-enabled while A was busy=' + (bStateDuring.btnOnclick === 'send') +
+      ', and remained free of loading dots after A completed=' + !dotsAfter;
   }
 });
 
@@ -1079,9 +1085,9 @@ scenarios.push({
 
 scenarios.push({
   id: 218,
-  name: 'Switching THREADS mid-stream leaves a mismatched composer state - initChatMode unconditionally re-enables the input and send button (disabled=false) but never re-wires the button, so while the old stream is still active the input is editable, isLoading=false, and the button still shows Stop; pressing Enter sends a SECOND request that clobbers the first stream (same family as #214, but on the loadThread/initChatMode path)',
+  name: 'Switching threads mid-generation keeps the new thread independently sendable instead of inheriting the old thread Stop state',
   mode: 'sse-slow',
-  regression: true, // FIXED bug #218 kept as a regression check (composer stays in Stop mode mid-stream)
+  regression: true, // Thread-scoped generation: A busy must not put idle B into Stop mode.
   settings: {},
   fixtures: {
     threads: [
@@ -1103,26 +1109,24 @@ scenarios.push({
     await sendChatMessage(cdp, 'question for A');
     await cdp.waitFor('typeof streamState !== "undefined" && streamState.active === true', 20000, 50, 'streaming active');
     await sleep(150);
-    // Switch to thread B (which ENDS WITH AN ASSISTANT) while A's stream is
-    // still in flight.
+
     await cdp.eval('window.loadThread("t-ui-b-218"); true');
     await cdp.waitFor('window.activeThreadId === "t-ui-b-218" && chatMessages.length >= 2', 15000, 300, 'thread B loaded');
     await sleep(400);
+
     const state = await cdp.eval(`(() => ({
       streamActive: (typeof streamState !== 'undefined' && streamState.active) || false,
       inputDisabled: document.getElementById('chat-input').disabled,
       isLoading: (typeof isLoading !== 'undefined' && isLoading) || false,
-      btnOnclick: (function(){ var b = document.getElementById('chat-send-btn'); return b && b.onclick ? String(b.onclick).indexOf('onStopStreaming') >= 0 ? 'stop' : 'send' : 'none'; })()
+      btnOnclick: (function(){ var b = document.getElementById('chat-send-btn'); if (!b || !b.onclick) return 'none'; if (b.onclick === onStopStreaming) return 'stop'; if (b.onclick === onChatSend) return 'send'; return 'other'; })()
     }))()`);
-    // FIXED (bug #218): initChatMode must keep the composer in Stop mode
-    // while the first request is in flight - input disabled, isLoading stays
-    // true, button wired to Stop.
-    if (!state.streamActive)
-      throw new Error('setup: first stream already finished before the state check');
-    if (!state.inputDisabled || !state.isLoading || state.btnOnclick !== 'stop')
-      throw new Error('composer mismatch after thread switch (bug #218 not fixed): ' + JSON.stringify(state));
-    // Prove Enter cannot send a second request: even if a keydown reaches the
-    // handler, the stream-active guard cancels instead of sending.
+
+    const aBusy = await cdp.eval('typeof isThreadRequestInFlight === "function" && isThreadRequestInFlight("t-ui-a-218")');
+    if (!aBusy)
+      throw new Error('setup: thread A request finished before the state check');
+    if (state.streamActive || state.inputDisabled || state.isLoading || state.btnOnclick !== 'send')
+      throw new Error('idle B inherited A generation state: ' + JSON.stringify(state));
+
     await cdp.eval('if (window.__posted) window.__posted.length = 0;');
     await cdp.eval(`(() => {
       const input = document.getElementById('chat-input');
@@ -1131,14 +1135,16 @@ scenarios.push({
       return true;
     })()`);
     await sleep(500);
+
     const posted = await cdp.eval('(window.__posted || []).slice()');
     const secondSendPosted = posted.some((m) => String(m).indexOf('"chatSend"') >= 0 || String(m).indexOf('chatSend') >= 0);
-    if (secondSendPosted)
-      throw new Error('Enter sent a second request while the first stream was in flight (bug #218 not fixed): ' + JSON.stringify(posted));
+    if (!secondSendPosted || posted.some((m) => String(m).indexOf('cancelStream') >= 0))
+      throw new Error('idle B did not send independently while A was in flight: ' + JSON.stringify(posted));
+
     await waitStreamingIdle(cdp, 40000);
-    return 'switched to assistant-ended thread B mid-stream: composer stayed disabled (inputDisabled=' + state.inputDisabled +
-      ' isLoading=' + state.isLoading + ' btn=' + state.btnOnclick + '); a forced Enter keydown posted ' +
-      JSON.stringify(posted) + ' (cancel, never chatSend) - the mismatch cannot fire a second send';
+    return 'switched to assistant-ended thread B while A generated: B stayed Send-enabled (inputDisabled=' + state.inputDisabled +
+      ' isLoading=' + state.isLoading + ' btn=' + state.btnOnclick + '); Enter posted ' +
+      JSON.stringify(posted) + ' (chatSend, never cancel) while A remained active in the background';
   }
 });
 
@@ -1711,4 +1717,331 @@ scenarios.push({
   }
 });
 
+scenarios.push({
+  id: 337,
+  name: 'Per-thread generation is fully independent across chats: concurrent sends persist separately, switching restores each thread Stop state, and stopping A never cancels B',
+  mode: 'sse-slow',
+  regression: true,
+  settings: {},
+  fixtures: {
+    threads: [
+      { id: 't-independent-a-337', title: 'Independent A', active_leaf_id: 'm-337-a0' },
+      { id: 't-independent-b-337', title: 'Independent B', active_leaf_id: 'm-337-b0' }
+    ],
+    messages: [
+      { id: 'm-337-au0', thread_id: 't-independent-a-337', role: 'user', content: 'seed A', token_count: 2, active_path_tokens: 2 },
+      { id: 'm-337-a0', thread_id: 't-independent-a-337', role: 'assistant', content: 'seed answer A', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-337-au0', token_count: 3, prompt_tokens: 4, active_path_tokens: 5 },
+      { id: 'm-337-bu0', thread_id: 't-independent-b-337', role: 'user', content: 'seed B', token_count: 2, active_path_tokens: 2 },
+      { id: 'm-337-b0', thread_id: 't-independent-b-337', role: 'assistant', content: 'seed answer B', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-337-bu0', token_count: 3, prompt_tokens: 4, active_path_tokens: 5 }
+    ]
+  },
+  async body({ cdp, dbPath }) {
+    const buttonMode = `(() => {
+      var b = document.getElementById('chat-send-btn');
+      if (!b || !b.onclick) return 'none';
+      if (b.onclick === onStopStreaming) return 'stop';
+      if (b.onclick === onChatSend) return 'send';
+      return 'other';
+    })()`;
+
+    await showChat();
+    await cdp.waitFor('document.querySelectorAll("#thread-list .chat-item").length >= 2', 15000, 300, 'thread list');
+
+    // Phase 1: start A, switch only after B's actual chat content has loaded,
+    // then start B while A remains in flight.
+    await cdp.eval('window.loadThread("t-independent-a-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-a-337" && chatMessages.some((m) => m.id === "m-337-a0")', 15000, 300, 'thread A loaded');
+    await sleep(300);
+    await sendChatMessage(cdp, 'phase 1 request A');
+    await cdp.waitFor('isThreadRequestInFlight("t-independent-a-337")', 10000, 50, 'thread A busy');
+
+    await cdp.eval('window.loadThread("t-independent-b-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-b-337" && chatMessages.some((m) => m.id === "m-337-b0")', 15000, 300, 'thread B loaded');
+    await sleep(300);
+
+    const bIdleMode = await cdp.eval(buttonMode);
+    const bIdleInput = await cdp.eval('document.getElementById("chat-input").disabled');
+    if (bIdleMode !== 'send' || bIdleInput)
+      throw new Error('B is not independently sendable while A is busy: mode=' + bIdleMode + ' inputDisabled=' + bIdleInput);
+
+    await sendChatMessage(cdp, 'phase 1 request B');
+    await cdp.waitFor('isThreadRequestInFlight("t-independent-a-337") && isThreadRequestInFlight("t-independent-b-337")', 10000, 50, 'both threads busy');
+    if (await cdp.eval(buttonMode) !== 'stop')
+      throw new Error('busy B did not show Stop');
+
+    await cdp.eval('window.loadThread("t-independent-a-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-a-337" && chatMessages.some((m) => m.content === "phase 1 request A")', 15000, 300, 'thread A returned');
+    await sleep(300);
+    if (await cdp.eval(buttonMode) !== 'stop')
+      throw new Error('switching back to busy A did not restore Stop');
+
+    await waitStreamingIdle(cdp, 40000);
+    await sleep(500);
+
+    const phase1A = seed.query(dbPath,
+      "SELECT COUNT(*) AS c FROM messages WHERE thread_id=? AND role='assistant' AND parent_id IN (SELECT id FROM messages WHERE thread_id=? AND role='user' AND content=?)",
+      ['t-independent-a-337', 't-independent-a-337', 'phase 1 request A'])[0].c;
+    const phase1B = seed.query(dbPath,
+      "SELECT COUNT(*) AS c FROM messages WHERE thread_id=? AND role='assistant' AND parent_id IN (SELECT id FROM messages WHERE thread_id=? AND role='user' AND content=?)",
+      ['t-independent-b-337', 't-independent-b-337', 'phase 1 request B'])[0].c;
+    if (phase1A !== 1 || phase1B !== 1)
+      throw new Error('concurrent responses did not persist independently: A=' + phase1A + ' B=' + phase1B);
+
+    // Phase 2: run both again, stop A only, and prove B remains in flight.
+    await cdp.eval('window.loadThread("t-independent-a-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-a-337" && chatMessages.some((m) => m.content === "phase 1 request A")', 15000, 300, 'thread A phase 2 loaded');
+    await sleep(250);
+    await sendChatMessage(cdp, 'phase 2 request A to cancel');
+    await cdp.waitFor('isThreadRequestInFlight("t-independent-a-337")', 10000, 50, 'thread A phase 2 busy');
+
+    await cdp.eval('window.loadThread("t-independent-b-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-b-337" && chatMessages.some((m) => m.content === "phase 1 request B")', 15000, 300, 'thread B phase 2 loaded');
+    await sleep(250);
+    await sendChatMessage(cdp, 'phase 2 request B must continue');
+    await cdp.waitFor('isThreadRequestInFlight("t-independent-a-337") && isThreadRequestInFlight("t-independent-b-337")', 10000, 50, 'both phase 2 threads busy');
+
+    await cdp.eval('window.loadThread("t-independent-a-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-a-337" && chatMessages.some((m) => m.content === "phase 2 request A to cancel")', 15000, 300, 'thread A ready to stop');
+    await sleep(200);
+    if (await cdp.eval(buttonMode) !== 'stop')
+      throw new Error('A was not in Stop mode before cancellation');
+
+    await cdp.click('#chat-send-btn');
+    await cdp.waitFor('!isThreadRequestInFlight("t-independent-a-337") && isThreadRequestInFlight("t-independent-b-337")', 15000, 50, 'A stopped while B still busy');
+
+    await cdp.eval('window.loadThread("t-independent-b-337"); true');
+    await cdp.waitFor('window.activeThreadId === "t-independent-b-337" && chatMessages.some((m) => m.content === "phase 2 request B must continue")', 15000, 300, 'thread B after A stop');
+    await sleep(200);
+
+    const bAfterAStopMode = await cdp.eval(buttonMode);
+    const bAfterAStopDisabled = await cdp.eval('document.getElementById("chat-input").disabled');
+    if (bAfterAStopMode !== 'stop' || !bAfterAStopDisabled)
+      throw new Error('stopping A changed B generation state: mode=' + bAfterAStopMode + ' inputDisabled=' + bAfterAStopDisabled);
+
+    await waitStreamingIdle(cdp, 40000);
+    await sleep(500);
+
+    const phase2B = seed.query(dbPath,
+      "SELECT COUNT(*) AS c FROM messages WHERE thread_id=? AND role='assistant' AND parent_id IN (SELECT id FROM messages WHERE thread_id=? AND role='user' AND content=?)",
+      ['t-independent-b-337', 't-independent-b-337', 'phase 2 request B must continue'])[0].c;
+    if (phase2B !== 1)
+      throw new Error('B response did not persist after stopping A: B=' + phase2B);
+
+    return 'A/B concurrent sends both persisted; switching restored each busy thread Stop state; stopping A left B in Stop mode until B completed and persisted its response';
+  }
+});
+
+
+
+
+scenarios.push({
+  id: 338,
+  name: 'Background generation in A does not block branch navigation, message editing, or regenerate in B',
+  mode: 'sse-slow',
+  mockOpts: { chunkDelay: 1500 },
+  regression: true,
+  settings: {},
+  fixtures: {
+    threads: [
+      { id: 't-actions-a-338', title: 'Busy A', active_leaf_id: 'm-338-aa1' },
+      { id: 't-actions-b-338', title: 'Actions B', active_leaf_id: 'm-338-ba2' }
+    ],
+    messages: [
+      { id: 'm-338-au1', thread_id: 't-actions-a-338', role: 'user', content: 'A seed', token_count: 4, active_path_tokens: 4 },
+      { id: 'm-338-aa1', thread_id: 't-actions-a-338', role: 'assistant', content: 'A seed answer', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-338-au1', token_count: 5, prompt_tokens: 8, active_path_tokens: 9 },
+      { id: 'm-338-bu1', thread_id: 't-actions-b-338', role: 'user', content: 'B root question', token_count: 4, active_path_tokens: 4 },
+      { id: 'm-338-ba1', thread_id: 't-actions-b-338', role: 'assistant', content: 'B branch one', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-338-bu1', sibling_group: 'sg-338-b', sibling_index: 0, token_count: 5, prompt_tokens: 8, active_path_tokens: 9 },
+      { id: 'm-338-ba2', thread_id: 't-actions-b-338', role: 'assistant', content: 'B branch two', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-338-bu1', sibling_group: 'sg-338-b', sibling_index: 1, token_count: 5, prompt_tokens: 8, active_path_tokens: 9 }
+    ]
+  },
+  async body({ cdp, dbPath }) {
+    await showChat();
+    await cdp.waitFor('document.querySelectorAll("#thread-list .chat-item").length >= 2', 15000, 300, 'thread list');
+
+    // Phase 1: while A is streaming, B must remain fully interactive for
+    // branch navigation and local message editing.
+    await cdp.eval('window.loadThread("t-actions-a-338"); true');
+    await cdp.waitFor('window.activeThreadId === "t-actions-a-338" && chatMessages.some((m) => m.id === "m-338-aa1")', 15000, 300, 'A loaded');
+    await sendChatMessage(cdp, 'phase 1 long request A 338');
+    await cdp.waitFor('isThreadRequestInFlight("t-actions-a-338")', 10000, 50, 'A phase 1 busy');
+
+    await cdp.eval('window.loadThread("t-actions-b-338"); true');
+    await cdp.waitFor('window.activeThreadId === "t-actions-b-338" && chatMessages.some((m) => m.id === "m-338-ba2")', 15000, 300, 'B loaded');
+    await sleep(250);
+
+    if (!await cdp.eval('isThreadRequestInFlight("t-actions-a-338")'))
+      throw new Error('setup: A finished before B actions were exercised');
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Previous branch"]');
+    await cdp.waitFor('chatMessages[1] && chatMessages[1].id === "m-338-ba1"', 10000, 200, 'B switched branch while A busy');
+    if (!await cdp.eval('isThreadRequestInFlight("t-actions-a-338")'))
+      throw new Error('A finished before branch navigation assertion');
+
+    await cdp.click('#chat-messages .msg:nth-child(1) .msg-action-btn[title="Edit"]');
+    await cdp.waitFor('document.querySelector("#chat-messages .msg:nth-child(1)").classList.contains("editing")', 5000, 100, 'B edit UI open while A busy');
+    await cdp.type('#chat-messages .msg:nth-child(1) .msg-edit-textarea', 'B root edited while A busy 338');
+    await cdp.click('#chat-messages .msg:nth-child(1) .save-overwrite');
+    await cdp.waitFor('chatMessages[0] && chatMessages[0].content === "B root edited while A busy 338"', 10000, 200, 'B edit persisted in UI');
+    if (!await cdp.eval('isThreadRequestInFlight("t-actions-a-338")'))
+      throw new Error('A finished before edit isolation assertion');
+
+    const edited = seed.query(dbPath, "SELECT content FROM messages WHERE id='m-338-bu1'")[0];
+    if (!edited || edited.content !== 'B root edited while A busy 338')
+      throw new Error('B overwrite edit did not persist while A was busy: ' + JSON.stringify(edited));
+
+    await waitStreamingIdle(cdp, 40000);
+
+    // Phase 2: start a fresh A request, then regenerate B. Both requests must
+    // coexist and persist to their own threads.
+    await cdp.eval('window.loadThread("t-actions-a-338"); true');
+    await cdp.waitFor('window.activeThreadId === "t-actions-a-338" && chatMessages.some((m) => m.content === "phase 1 long request A 338")', 15000, 300, 'A phase 2 loaded');
+    await sendChatMessage(cdp, 'phase 2 long request A 338');
+    await cdp.waitFor('isThreadRequestInFlight("t-actions-a-338")', 10000, 50, 'A phase 2 busy');
+
+    await cdp.eval('window.loadThread("t-actions-b-338"); true');
+    await cdp.waitFor('window.activeThreadId === "t-actions-b-338" && chatMessages[0] && chatMessages[0].content === "B root edited while A busy 338"', 15000, 300, 'B phase 2 loaded');
+    await sleep(200);
+
+    const retryBtn = '#chat-messages .msg:nth-child(2) .msg-action-btn[title="Retry"]';
+    await cdp.waitFor('document.querySelector(' + JSON.stringify(retryBtn) + ') !== null', 5000, 100, 'B retry button');
+    await cdp.click(retryBtn);
+    await cdp.waitFor('isThreadRequestInFlight("t-actions-a-338") && isThreadRequestInFlight("t-actions-b-338")', 10000, 50, 'A and B both busy after B regenerate');
+
+    await waitStreamingIdle(cdp, 40000);
+    await sleep(500);
+
+    const bMockReplies = seed.query(dbPath,
+      "SELECT COUNT(*) AS c FROM messages WHERE thread_id='t-actions-b-338' AND role='assistant' AND content='Hello from the mock LLM. This is the streamed answer.'")[0].c;
+    const aPhase2Replies = seed.query(dbPath,
+      "SELECT COUNT(*) AS c FROM messages WHERE thread_id='t-actions-a-338' AND role='assistant' AND parent_id IN (SELECT id FROM messages WHERE thread_id='t-actions-a-338' AND role='user' AND content='phase 2 long request A 338')")[0].c;
+    if (bMockReplies < 1 || aPhase2Replies !== 1)
+      throw new Error('cross-thread regenerate persistence failed: B mock replies=' + bMockReplies + ' A phase2=' + aPhase2Replies);
+
+    return 'while A streamed, B switched assistant branches and overwrote its user message; during a fresh A stream, B regenerated independently and both responses persisted';
+  }
+});
+
+
+scenarios.push({
+  id: 341,
+  name: 'Retry branch ownership survives cross-thread concurrency: B normal sends stay branch-free, arrows switch real context, and later normal A sends do not inherit retry state',
+  mode: 'sse-slow',
+  mockOpts: { chunkDelay: 1500 },
+  regression: true,
+  settings: {},
+  fixtures: {
+    threads: [
+      { id: 't-branch-a-341', title: 'Branch A', active_leaf_id: 'm-341-a1' },
+      { id: 't-branch-b-341', title: 'Branch B', active_leaf_id: 'm-341-b1' }
+    ],
+    messages: [
+      { id: 'm-341-au1', thread_id: 't-branch-a-341', role: 'user', content: 'A root', token_count: 2, active_path_tokens: 2 },
+      { id: 'm-341-a1', thread_id: 't-branch-a-341', role: 'assistant', content: 'A original answer', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-341-au1', token_count: 3, prompt_tokens: 4, active_path_tokens: 5 },
+      { id: 'm-341-bu1', thread_id: 't-branch-b-341', role: 'user', content: 'B root', token_count: 2, active_path_tokens: 2 },
+      { id: 'm-341-b1', thread_id: 't-branch-b-341', role: 'assistant', content: 'B original answer', model: 'deepseek/deepseek-v4-flash', parent_id: 'm-341-bu1', token_count: 3, prompt_tokens: 4, active_path_tokens: 5 }
+    ]
+  },
+  async body({ cdp, dbPath }) {
+    await showChat();
+    await cdp.waitFor('document.querySelectorAll("#thread-list .chat-item").length >= 2', 15000, 300, 'thread list');
+
+    // Create A's sibling group through the real Retry action.
+    await cdp.eval('window.loadThread("t-branch-a-341"); true');
+    await cdp.waitFor('window.activeThreadId === "t-branch-a-341" && chatMessages.some((m) => m.id === "m-341-a1")', 15000, 250, 'A loaded');
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Retry"]');
+    await cdp.waitFor('isThreadRequestInFlight("t-branch-a-341")', 10000, 50, 'A retry busy');
+    await sleep(350);
+
+    // While A's retry metadata is actively being swapped through the shared
+    // request window, send a completely normal request in B.
+    await cdp.eval('window.loadThread("t-branch-b-341"); true');
+    await cdp.waitFor('window.activeThreadId === "t-branch-b-341" && chatMessages.some((m) => m.id === "m-341-b1")', 15000, 250, 'B loaded');
+    await sleep(200);
+    await sendChatMessage(cdp, 'B normal while A retry 341');
+    await cdp.waitFor('isThreadRequestInFlight("t-branch-a-341") && isThreadRequestInFlight("t-branch-b-341")', 10000, 50, 'A retry and B normal request both busy');
+    await waitStreamingIdle(cdp, 40000);
+    await sleep(500);
+
+    const aRows = seed.query(dbPath,
+      "SELECT id, parent_id, sibling_group, sibling_index, content FROM messages WHERE thread_id='t-branch-a-341' AND role='assistant' ORDER BY sibling_index, rowid");
+    if (aRows.length !== 2)
+      throw new Error('Retry A did not produce exactly two assistant siblings: ' + JSON.stringify(aRows));
+    const retryGroup = String(aRows[0].sibling_group || '');
+    if (!retryGroup || String(aRows[1].sibling_group || '') !== retryGroup)
+      throw new Error('Retry A did not create one shared sibling group: ' + JSON.stringify(aRows));
+    if (String(aRows[0].parent_id || '') !== 'm-341-au1' || String(aRows[1].parent_id || '') !== 'm-341-au1')
+      throw new Error('Retry A sibling parents differ: ' + JSON.stringify(aRows));
+
+    const newRetry = aRows.find((row) => String(row.id) !== 'm-341-a1');
+    if (!newRetry)
+      throw new Error('Could not identify retried A assistant: ' + JSON.stringify(aRows));
+
+    const bRows = seed.query(dbPath,
+      "SELECT a.id, a.parent_id, a.sibling_group, u.id AS user_id FROM messages a JOIN messages u ON a.parent_id=u.id WHERE a.thread_id='t-branch-b-341' AND a.role='assistant' AND u.content='B normal while A retry 341'");
+    if (bRows.length !== 1)
+      throw new Error('B normal response missing after concurrent A retry: ' + JSON.stringify(bRows));
+    if (bRows[0].sibling_group)
+      throw new Error('B normal response inherited A retry sibling group: ' + JSON.stringify(bRows[0]));
+
+    // A must now display a real 2/2 branch. The arrows must change the actual
+    // visible message ID/content and the DB active leaf, not merely scroll.
+    await cdp.eval('window.loadThread("t-branch-a-341"); true');
+    await cdp.waitFor(
+      'window.activeThreadId === "t-branch-a-341" && chatMessages[1] && chatMessages[1].id === ' + JSON.stringify(String(newRetry.id)),
+      15000, 250, 'A retry branch loaded'
+    );
+    await sleep(200);
+    const label2 = await cdp.eval('document.querySelector("#chat-messages .msg:nth-child(2) .branch-label-inline")?.textContent || ""');
+    if (label2 !== '2/2')
+      throw new Error('retried A assistant did not render 2/2: ' + label2);
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Previous branch"]');
+    await cdp.waitFor('chatMessages[1] && chatMessages[1].id === "m-341-a1" && chatMessages[1].content === "A original answer"', 10000, 150, 'previous branch changed visible assistant');
+    await sleep(150);
+    const label1 = await cdp.eval('document.querySelector("#chat-messages .msg:nth-child(2) .branch-label-inline")?.textContent || ""');
+    if (label1 !== '1/2')
+      throw new Error('previous branch did not render 1/2: ' + label1);
+    let leaf = seed.query(dbPath, "SELECT active_leaf_id FROM chat_threads WHERE id='t-branch-a-341'")[0];
+    if (!leaf || String(leaf.active_leaf_id || '') !== 'm-341-a1')
+      throw new Error('previous branch did not update DB active leaf: ' + JSON.stringify(leaf));
+
+    await cdp.click('#chat-messages .msg:nth-child(2) .msg-action-btn[title="Next branch"]');
+    await cdp.waitFor(
+      'chatMessages[1] && chatMessages[1].id === ' + JSON.stringify(String(newRetry.id)),
+      10000, 150, 'next branch restored retried assistant'
+    );
+    await sleep(150);
+    leaf = seed.query(dbPath, "SELECT active_leaf_id FROM chat_threads WHERE id='t-branch-a-341'")[0];
+    if (!leaf || String(leaf.active_leaf_id || '') !== String(newRetry.id))
+      throw new Error('next branch did not update DB active leaf: ' + JSON.stringify(leaf));
+
+    // A normal follow-up after all retry activity must start a new path node,
+    // not become a third member of the retry sibling group.
+    await sendChatMessage(cdp, 'A normal after retry 341');
+    await cdp.waitFor('isThreadRequestInFlight("t-branch-a-341")', 10000, 50, 'A normal follow-up busy');
+    await waitStreamingIdle(cdp, 40000);
+    await sleep(500);
+
+    const finalRows = seed.query(dbPath,
+      "SELECT a.id, a.sibling_group, a.parent_id FROM messages a JOIN messages u ON a.parent_id=u.id WHERE a.thread_id='t-branch-a-341' AND a.role='assistant' AND u.content='A normal after retry 341'");
+    if (finalRows.length !== 1)
+      throw new Error('normal A follow-up response missing: ' + JSON.stringify(finalRows));
+    if (finalRows[0].sibling_group)
+      throw new Error('normal A follow-up inherited retry sibling group: ' + JSON.stringify(finalRows[0]));
+
+    const groupCount = seed.query(dbPath,
+      "SELECT COUNT(*) AS c FROM messages WHERE thread_id='t-branch-a-341' AND sibling_group=?",
+      [retryGroup])[0].c;
+    if (Number(groupCount) !== 2)
+      throw new Error('retry sibling group grew after a normal send: count=' + groupCount);
+
+    const finalHasBranchNav = await cdp.eval(
+      'document.querySelector("#chat-messages .msg:last-child .branch-label-inline") !== null'
+    );
+    if (finalHasBranchNav)
+      throw new Error('normal post-retry assistant incorrectly rendered branch arrows');
+
+    return 'retry A created exactly 2 valid siblings; concurrent normal B remained branch-free; arrows changed visible content and DB leaf; later normal A response remained outside the retry group';
+  }
+});
 module.exports = scenarios;

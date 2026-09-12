@@ -26,6 +26,12 @@ class SSEParser {
             return { type: "ignore" }
         }
 
+        ; A syntactically valid JSON scalar is not an SSE event object. Never
+        ; call Map methods on strings/numbers/null-like values extracted from
+        ; arbitrary provider text containing the literal `data: ` marker.
+        if Type(parsed) != "Map"
+            return { type: "ignore" }
+
         ; OpenAI-style SSE error events (`data: {"error": ...}`)
         ; is valid JSON WITHOUT a "choices" key - bracket-indexing a Map for a
         ; missing key THROWS in AHK v2 and crashed the poll. Surface the

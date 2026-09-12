@@ -57,7 +57,7 @@ OnWebMessageReceived(sender, args) {
             case "switchAssistant":
                 handleSwitchAssistant(parsed)
             case "cancelStream":
-                handleCancelStream()
+                handleCancelStream(parsed.Get("threadId", ""))
             case "hideWindow":
                 global chatWindow
                 chatWindow.Hide()
@@ -156,13 +156,9 @@ _AckWebMessage(reqId, action, ok, errorMsg) {
 ; Replaces sessionStorage-based recovery with DB as single source of truth.
 _OnWebViewReady() {
     global activeThreadId
-    ; Always re-enable the chat buttons on the ready handshake. The startup
-    ; setChatButtonsEnabled posts in ChatWindow.ahk race the page load:
-    ; WebView2 drops messages posted before the page installed its 'message'
-    ; listener, which left the Send button unwired on those launches. The page
-    ; posts webViewReady AFTER installing the listener, so this is the only
-    ; reliable point to wire the UI.
-    postWebMessage("setChatButtonsEnabled", true)
+    ; The ready handshake is the reliable point to wire the composer, but its
+    ; state must reflect THIS thread's request ownership rather than globally
+    ; forcing Send while a request is still in flight.
     ; The assistant/model list has the same race: ChatSettings.ahk pushes it
     ; on a one-shot 500ms timer at startup, and a slow page load drops that
     ; post, leaving the assistant picker (and _assistantList) empty until the
@@ -174,6 +170,8 @@ _OnWebViewReady() {
     _HandleRequestAllSettings()
     if activeThreadId
         _LoadThreadAndRefreshUI(activeThreadId)
+    threadBusy := activeThreadId ? _HasOtherActiveOperationsForThread(activeThreadId) : false
+    postWebMessage("setChatButtonsEnabled", { enabled: !threadBusy, threadId: activeThreadId })
 }
 
 ; Send full settings (merged with defaults) to WebView

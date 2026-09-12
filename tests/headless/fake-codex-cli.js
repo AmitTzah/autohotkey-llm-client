@@ -81,6 +81,9 @@ process.stdin.on('end', () => {
   const lower = lastUserContent.toLowerCase();
   const cancelMode = lower.includes('cancel this codex request');
   const slowThreadMode = lower.includes('slow thread a');
+  const slowThreadBMode = lower.includes('slow thread b');
+  const slowBranchMode = lower.includes('slow branch codex');
+  const dataMarkerMode = lower.includes('codex data marker');
   const searchMode = lower.includes('search on codex');
   const noSearchMode = lower.includes('search off codex');
   const secondTurnMode = lower.includes('second codex turn');
@@ -94,7 +97,11 @@ process.stdin.on('end', () => {
       ? '**Checking the requested current information**'
       : slowThreadMode
         ? '**Working on the originating thread**'
-        : cancelMode
+        : slowThreadBMode
+          ? '**Working on concurrent thread B**'
+          : slowBranchMode
+            ? '**Working on the originating Codex branch**'
+          : cancelMode
           ? '**Beginning a cancellable Codex response**'
           : '**Comparing the requested information**';
 
@@ -139,7 +146,13 @@ process.stdin.on('end', () => {
         ? 'SECOND CODEX ANSWER'
         : slowThreadMode
           ? 'THREAD A CODEX ANSWER'
-          : searchMode
+          : slowThreadBMode
+            ? 'THREAD B CODEX ANSWER'
+            : slowBranchMode
+              ? 'ORIGINATING BRANCH CODEX ANSWER'
+            : dataMarkerMode
+              ? 'CODEX DATA MARKER ANSWER\nOrdinary code-like text: data: "embedded scalar text"\nThis must remain assistant content.'
+            : searchMode
             ? 'SEARCH ON CODEX ANSWER'
             : noSearchMode
               ? 'SEARCH OFF CODEX ANSWER'
@@ -175,6 +188,6 @@ process.stdin.on('end', () => {
       return;
     }
 
-    setTimeout(complete, slowThreadMode ? 1300 : 550);
+    setTimeout(complete, slowBranchMode ? 3500 : slowThreadBMode ? 3000 : slowThreadMode ? 1300 : 550);
   }, 180);
 });
