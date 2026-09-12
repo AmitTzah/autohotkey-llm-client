@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.4.0] - 2026-09-13
+
+### Added
+
+- Optional Codex CLI backend using ChatGPT subscription authentication, with Codex reasoning summaries, native web search, image generation, usage tracking, and automatic thread titles.
+- Per-thread Codex request isolation for concurrent chats, thread switches, and branch navigation.
+- Mermaid diagram rendering and bracket-delimited LaTeX math support.
+- Completion sounds and attention indicators for finished responses.
+
+### Improved
+
+- New-chat defaults consistently control the selected assistant, model, and provider icon.
+- Markdown rendering and WebView startup were refactored into focused modules.
+- Chat links now open in the system's default browser.
+- Streaming, cancellation, retry, branch, and thread-switch state handling was substantially hardened.
+
+### Fixed
+
+- Duplicate messages and stale UI state during cancellation races.
+- Cross-thread response, usage, error, and retry-state leakage.
+- Model and settings preservation across edits, forks, retries, and reloads.
+- Codex image, reasoning, title-generation, and search state persistence.
+- Sidebar ordering, provider badges, trash disclosure state, and new-chat initialization edge cases.
+
 ## [1.3.1] - 2026-09-03
 
 ### Fixed
