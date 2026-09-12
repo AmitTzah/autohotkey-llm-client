@@ -44,17 +44,19 @@ generateThreadTitle(threadId) {
     titleGenStart := A_TickCount
     providerInfo := ProviderResolver.Resolve(titleGenModel)
     if providerInfo.transport = "codex-cli" {
-        ; The Codex backend guarantees one deliberate user action = one Codex
-        ; invocation. Auto-title generation is hidden background work, so never
-        ; spend a second subscription turn on it. Derive a deterministic local
-        ; title from the first user message instead.
-        title := _TitleGen_LocalFallbackTitle(threadId)
-        if title {
-            _TitleGen_PublishTitle(threadId, title)
-            debugLog("[TITLEGEN] local Codex fallback title='" title "' thread=" threadId)
-        } else {
-            _titleGenRequestedThreads.Delete(threadId)
-        }
+        ; Honor the configured Codex title model with an isolated async
+        ; request that never borrows or mutates the active chat's requestParams.
+        payload := LLMRequestBuilder.createJSONRequest(
+            titleGenModel,
+            titleGenSystemPrompt,
+            prompt,
+            "",
+            titleGenMaxTokens,
+            "",
+            false,
+            "disabled"
+        )
+        _TitleGen_BeginCodexRequest(threadId, titleGenModel, payload, providerInfo, titleGenStart)
         return
     }
 
@@ -119,6 +121,111 @@ generateThreadTitle(threadId) {
     _TitleGen_LogRequest(titleGenModel, providerInfo.providerKey, providerInfo.endpoint, payload, raw, title, titleGenStart, redacted)
 }
 
+; Start an isolated Codex title request and return immediately. The active
+; chat's requestParams is intentionally not read or modified anywhere in this path.
+_TitleGen_BeginCodexRequest(threadId, titleModel, payload, providerInfo, titleGenStart) {
+    global _titleGenRequestedThreads
+    uniqueID := ChatDB._UUID()
+    requestFile := A_Temp "\ChatWindow_TitleGen_" uniqueID ".json"
+    outputFile := A_Temp "\ChatWindow_TitleGen_Out_" uniqueID ".json"
+    errorFile := A_Temp "\ChatWindow_TitleGen_Err_" uniqueID ".txt"
+    FileOpen(requestFile, "w", "UTF-8-RAW").Write(payload)
+    cancelState := { cancelRequested: false, cancelled: false }
+
+    try {
+        asyncState := CodexCliTransport.BeginRequest(
+            providerInfo,
+            requestFile,
+            outputFile,
+            errorFile,
+            cancelState,
+            false,
+            "none"
+        )
+        asyncState.threadId := threadId
+        asyncState.titleModel := titleModel
+        asyncState.titlePayload := payload
+        asyncState.titleGenStart := titleGenStart
+        asyncState.titleRequestFile := requestFile
+        asyncState.titleOutputFile := outputFile
+        asyncState.titleErrorFile := errorFile
+        asyncState.pollTimer := _TitleGen_PollCodexRequest.Bind(asyncState)
+        SetTimer(asyncState.pollTimer, 50)
+        debugLog("[TITLEGEN] Codex title request started thread=" threadId " model=" titleModel)
+    } catch Error as e {
+        for path in [requestFile, outputFile, errorFile]
+            safeDelete(path)
+        if _titleGenRequestedThreads.Has(threadId)
+            _titleGenRequestedThreads.Delete(threadId)
+        debugLog("[TITLEGEN] Codex title start failed thread=" threadId ": " e.Message)
+    }
+}
+
+_TitleGen_PollCodexRequest(asyncState) {
+    try {
+        codexResult := CodexCliTransport.PollRequest(asyncState)
+        if !IsObject(codexResult)
+            return
+        SetTimer(asyncState.pollTimer, 0)
+        raw := FileExist(asyncState.titleOutputFile)
+            ? FileOpen(asyncState.titleOutputFile, "r", "UTF-8-RAW").Read()
+            : ""
+        if raw = "" && FileExist(asyncState.titleErrorFile)
+            raw := FileOpen(asyncState.titleErrorFile, "r", "UTF-8-RAW").Read()
+        _TitleGen_FinishCodexRequest(asyncState, raw)
+        _TitleGen_CleanupCodexFiles(asyncState)
+    } catch Error as e {
+        SetTimer(asyncState.pollTimer, 0)
+        global _titleGenRequestedThreads
+        if _titleGenRequestedThreads.Has(asyncState.threadId)
+            _titleGenRequestedThreads.Delete(asyncState.threadId)
+        _TitleGen_CleanupCodexFiles(asyncState)
+        debugLog("[TITLEGEN] Codex title poll failed thread=" asyncState.threadId ": " e.Message)
+    }
+}
+
+_TitleGen_FinishCodexRequest(asyncState, raw) {
+    global _titleGenRequestedThreads
+    result := _TitleGen_ParseResponse(raw)
+    title := result.title
+
+    debugLog("[API] Title gen - prompt=" result.promptTokens " completion=" result.completionTokens " model=" asyncState.titleModel)
+    _TitleGen_TrackUsage(
+        asyncState.titleModel,
+        asyncState.providerInfo.providerKey,
+        result.promptTokens,
+        result.completionTokens,
+        result.thinkingTokens,
+        asyncState.titleGenStart
+    )
+
+    redacted := IsSet(ThreadLockService) && ThreadLockService.ShouldRedactContent(asyncState.threadId)
+    if title {
+        if !redacted
+            _TitleGen_PublishTitle(asyncState.threadId, title)
+    } else {
+        if _titleGenRequestedThreads.Has(asyncState.threadId)
+            _titleGenRequestedThreads.Delete(asyncState.threadId)
+        debugLog("[TITLEGEN] no Codex title parsed - dispatch guard cleared thread=" asyncState.threadId)
+    }
+
+    _TitleGen_LogRequest(
+        asyncState.titleModel,
+        asyncState.providerInfo.providerKey,
+        "local:codex-cli",
+        asyncState.titlePayload,
+        raw,
+        title,
+        asyncState.titleGenStart,
+        redacted
+    )
+}
+
+_TitleGen_CleanupCodexFiles(asyncState) {
+    for path in [asyncState.titleRequestFile, asyncState.titleOutputFile, asyncState.titleErrorFile]
+        safeDelete(path)
+}
+
 ; Publish a local title and refresh both thread list and topbar.
 _TitleGen_PublishTitle(threadId, title) {
     ChatDB.Thread_Update(threadId, title)
@@ -137,31 +244,6 @@ _TitleGen_PublishTitle(threadId, title) {
     debugLog("[TITLEGEN] title='" title "' thread=" threadId
         . " dbFolderId='" dbFolderId "' resolvedFolderName='" folderName "'")
     postWebMessage("updateTopbarTitle", { text: title, folder: folderName })
-}
-
-; Codex title generation must not consume a hidden subscription turn. Use the
-; first user message as a deterministic local title instead, normalized and
-; shortened at a word boundary where possible.
-_TitleGen_LocalFallbackTitle(threadId) {
-    path := ChatDB.Msg_GetActivePath(threadId)
-    text := ""
-    for msg in path {
-        if msg.role = "user" && Trim(msg.content) != "" {
-            text := msg.content
-            break
-        }
-    }
-    text := Trim(RegExReplace(text, "\s+", " "), " `t`r`n-*#>")
-    if text = ""
-        return ""
-    if StrLen(text) > 60 {
-        candidate := SubStr(text, 1, 60)
-        lastSpace := InStr(candidate, " ", false, -1)
-        if lastSpace >= 24
-            candidate := SubStr(candidate, 1, lastSpace - 1)
-        text := RTrim(candidate, " ,;:-") "…"
-    }
-    return _TitleGen_CleanTitle(text)
 }
 
 ; Build the prompt from the first user+assistant exchange.

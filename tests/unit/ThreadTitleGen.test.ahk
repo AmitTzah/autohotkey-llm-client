@@ -165,40 +165,67 @@ class ThreadTitleGenTest {
     ; generateThreadTitle twice (e.g. a direct call plus a duplicate timer
     ; scheduled before the first fired) must dispatch exactly one API call.
     ; ----------------------------------------------------
-    Generate_Codex_UsesLocalFallbackWithoutCliTurn() {
-        global titleGenModel, _mockRunCalls, providers
+    FinishCodexRequest_PublishesTitleWithoutMutatingChatRequestState() {
+        global requestParams, _titleGenRequestedThreads
         this._setupDb()
         this._setGlobals()
-        titleGenModel := "codex/gpt-5.6-luna"
-        hadCodex := providers.Has("codex")
-        oldCodex := hadCodex ? providers["codex"] : ""
-        providers["codex"] := { displayName: "Codex", endpoint: "", fimEndpoint: "", transport: "codex-cli", authMode: "chatgpt", billingMode: "chatgpt-subscription" }
         threadId := ChatDB.Thread_Create("New Chat")
-        usrId := ChatDB.Msg_Insert({ thread_id: threadId, role: "user", content: "Please compare the two implementation approaches and explain which one is safer for a Windows desktop application." })
-        ChatDB.Msg_Insert({ thread_id: threadId, role: "assistant", content: "Here is the comparison.", parent_id: usrId })
-        _mockRunCalls := []
+        usrId := ChatDB.Msg_Insert({ thread_id: threadId, role: "user", content: "Please title this" })
+        ChatDB.Msg_Insert({ thread_id: threadId, role: "assistant", content: "A response", parent_id: usrId })
+        _titleGenRequestedThreads[threadId] := true
+
+        oldParams := requestParams
+        requestParams := Map(
+            "singleAPIModelName", "openai/gpt-5-mini",
+            "providerName", "openai",
+            "systemOverride", "main chat system"
+        )
+        providerInfo := { providerKey: "codex", transport: "codex-cli", endpoint: "", modelName: "gpt-5.6-luna" }
+        usage := { promptTokens: 11, completionTokens: 4, thinkingTokens: 0, cachedTokens: 0, totalTokens: 15 }
+        raw := CodexCliTransport.BuildSyntheticResponse("gpt-5.6-luna", "Codex Generated Title", usage)
+        asyncState := {
+            threadId: threadId,
+            titleModel: "codex/gpt-5.6-luna",
+            titlePayload: "{title payload}",
+            titleGenStart: A_TickCount,
+            providerInfo: providerInfo
+        }
+
         web := this._captureWebView()
         try {
-            generateThreadTitle(threadId)
+            _TitleGen_FinishCodexRequest(asyncState, raw)
+            if requestParams["singleAPIModelName"] != "openai/gpt-5-mini"
+                || requestParams["providerName"] != "openai"
+                || requestParams["systemOverride"] != "main chat system"
+                throw Error("Codex title finalization mutated active chat requestParams")
         } finally {
+            requestParams := oldParams
             web.restore()
-            if hadCodex
-                providers["codex"] := oldCodex
-            else
-                providers.Delete("codex")
         }
-        if _mockRunCalls.Length != 0
-            throw Error("Codex auto-title must not launch a hidden CLI/model turn")
+
         title := ""
         for t in ChatDB.Thread_List() {
             if t.id = threadId
                 title := t.title
         }
-        if title = "New Chat" || InStr(title, "Please compare") != 1 || StrLen(title) > 60
-            throw Error("Codex local title fallback was not deterministic/short: '" title "'")
-        usage := ChatDB.Usage_Query(Map("timeRange", "all", "model", "", "type", "command"))
-        if usage.commands.Length != 0
-            throw Error("Local Codex title fallback must not record a model/API request")
+        if title != "Codex Generated Title"
+            throw Error("Codex synthetic title was not persisted: '" title "'")
+
+        posted := false
+        for _, json in web.captured {
+            if InStr(json, "updateTopbarTitle") && InStr(json, "Codex Generated Title") {
+                posted := true
+                break
+            }
+        }
+        if !posted
+            throw Error("Codex title was not reposted to the UI")
+
+        commandUsage := ChatDB.Usage_Query(Map("timeRange", "all", "model", "", "type", "command"))
+        if commandUsage.commands.Length != 1
+            throw Error("Expected one Codex title usage row")
+        if commandUsage.commands[1].provider != "codex" || commandUsage.commands[1].model != "codex/gpt-5.6-luna"
+            throw Error("Codex title usage attribution was wrong")
         this._teardownDb()
     }
 

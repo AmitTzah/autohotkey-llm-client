@@ -1101,4 +1101,114 @@ scenarios.push({
     return 'Codex ran on branch A; branch B showed no A loading/activity, switching back restored A busy activity, background completion stayed parented to A and did not yank B';
   }
 });
+scenarios.push({
+  id: 347,
+  name: 'Codex title model stays isolated from HTTP and Codex chat request state',
+  regression: true,
+  mode: 'sse-success',
+  settings: {
+    threadTitles: {
+      enabled: true,
+      model: 'codex/gpt-5.6-luna',
+      prompt: 'TITLE_PROMPT_347: Return only a short title.',
+      maxTokens: 50
+    }
+  },
+  fixtures: {
+    threads: [
+      { id: 't-title-http-347', title: 'New Chat', active_leaf_id: null, model_override: 'openai/gpt-5-mini' },
+      { id: 't-title-codex-347', title: 'New Chat', active_leaf_id: null, model_override: 'codex/gpt-5.6-luna' }
+    ]
+  },
+  preLaunch(dataDir) { installFakeCodex(dataDir); },
+  launchEnv: fakeLaunchEnv,
+  async body({ cdp, dataDir, dbPath, mockLog }) {
+    async function waitForExec(predicate, label, timeoutMs = 15000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const found = execLog(dataDir).find(predicate);
+        if (found) return found;
+        await sleep(100);
+      }
+      throw new Error('timeout waiting for ' + label + ': ' + JSON.stringify(execLog(dataDir)));
+    }
+    async function waitForTitle(threadId, label) {
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const rows = seed.query(dbPath, 'SELECT title FROM chat_threads WHERE id = ?', [threadId]);
+        if (rows.length && rows[0].title !== 'New Chat') return rows[0].title;
+        await sleep(100);
+      }
+      throw new Error('timeout waiting for ' + label);
+    }
+
+    await showChat();
+
+    // Non-Codex main chat + Codex title request.
+    await cdp.eval('window.loadThread("t-title-http-347"); true');
+    await cdp.waitFor(
+      'window.activeThreadId === "t-title-http-347" && window._currentSettings && window._currentSettings.model === "openai/gpt-5-mini"',
+      15000, 200, 'HTTP title thread'
+    );
+    await sendChatMessage(cdp, 'HTTP first exchange 347');
+    await waitStreamingIdle(cdp, 30000);
+    await waitForExec(
+      (e) => String(e.instructions || '').includes('TITLE_PROMPT_347') &&
+             String(e.stdin || '').includes('HTTP first exchange 347'),
+      'Codex title exec for HTTP chat'
+    );
+
+    // The title process is still live here in the fake CLI. A follow-up chat
+    // must remain an OpenAI request while the Codex title completes.
+    await sendChatMessage(cdp, 'HTTP second exchange 347');
+    await waitStreamingIdle(cdp, 30000);
+    await waitForTitle('t-title-http-347', 'HTTP-thread Codex title');
+    const httpModel = await cdp.eval('window._currentSettings && window._currentSettings.model');
+    if (httpModel !== 'openai/gpt-5-mini')
+      throw new Error('Codex title contaminated HTTP chat model state: ' + httpModel);
+    const httpRequests = fs.existsSync(mockLog)
+      ? fs.readFileSync(mockLog, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+          .filter((r) => String(r.url || '').includes('/chat/completions') && r.body && Array.isArray(r.body.messages))
+      : [];
+    const firstHttp = httpRequests.find((r) => JSON.stringify(r.body.messages).includes('HTTP first exchange 347'));
+    const secondHttp = httpRequests.find((r) => JSON.stringify(r.body.messages).includes('HTTP second exchange 347'));
+    if (!firstHttp || !secondHttp || firstHttp.body.model !== 'gpt-5-mini' || secondHttp.body.model !== 'gpt-5-mini')
+      throw new Error('Codex title contaminated outbound HTTP request model: ' + JSON.stringify(httpRequests));
+
+    // Codex main chat + Codex title request. Start a second Codex turn while the
+    // title Codex process is still live to prove the two request states are independent.
+    await cdp.eval('window.loadThread("t-title-codex-347"); true');
+    await cdp.waitFor(
+      'window.activeThreadId === "t-title-codex-347" && window._currentSettings && window._currentSettings.model === "codex/gpt-5.6-luna"',
+      15000, 200, 'Codex title thread'
+    );
+    await sendChatMessage(cdp, 'first codex title exchange 347');
+    await waitStreamingIdle(cdp, 30000);
+    await waitForExec(
+      (e) => String(e.instructions || '').includes('TITLE_PROMPT_347') &&
+             String(e.stdin || '').includes('first codex title exchange 347'),
+      'Codex title exec for Codex chat'
+    );
+
+    await sendChatMessage(cdp, 'second codex turn');
+    await waitStreamingIdle(cdp, 30000);
+    await waitForTitle('t-title-codex-347', 'Codex-thread Codex title');
+
+    const codexModel = await cdp.eval('window._currentSettings && window._currentSettings.model');
+    if (codexModel !== 'codex/gpt-5.6-luna')
+      throw new Error('Codex title contaminated Codex chat model state: ' + codexModel);
+    const latest = seed.query(dbPath,
+      "SELECT content, model, provider FROM messages WHERE thread_id='t-title-codex-347' AND role='assistant' ORDER BY rowid DESC LIMIT 1")[0];
+    if (!latest || String(latest.content || '').trim() !== 'SECOND CODEX ANSWER' ||
+        String(latest.model || '').indexOf('gpt-5.6-luna') < 0 || latest.provider !== 'codex')
+      throw new Error('post-title Codex chat request was corrupted: ' + JSON.stringify(latest));
+
+    const titleExecs = execLog(dataDir).filter((e) => String(e.instructions || '').includes('TITLE_PROMPT_347'));
+    if (titleExecs.length !== 2)
+      throw new Error('expected one Codex title invocation per first exchange: ' + JSON.stringify(titleExecs));
+
+    return 'Codex generated titles for HTTP and Codex chats while overlapping follow-up sends retained their own model/provider state';
+  }
+});
+
 module.exports = scenarios;
