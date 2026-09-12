@@ -140,6 +140,39 @@ describe('loadTrashList', () => {
         assert.doesNotThrow(() => ctx.loadTrashList([{ id: 't3', title: 'Old Chat', updated_at: '2026-01-01' }]));
     });
 
+    it('preserves a collapsed trash disclosure when non-empty data refreshes', () => {
+        const ctx = loadModules();
+        const wrap = ctx.document.getElementById('trashWrap');
+        wrap.classList.add('collapsed');
+
+        ctx.loadTrashList([{ id: 't3', title: 'Old Chat', updated_at: '2026-01-01' }]);
+
+        assert.ok(wrap.classList.contains('collapsed'),
+            'refreshing trash data must not auto-expand a user-collapsed Trash section');
+    });
+
+    it('preserves an expanded trash disclosure when non-empty data refreshes', () => {
+        const ctx = loadModules();
+        const wrap = ctx.document.getElementById('trashWrap');
+        wrap.classList.remove('collapsed');
+
+        ctx.loadTrashList([{ id: 't3', title: 'Old Chat', updated_at: '2026-01-01' }]);
+
+        assert.ok(!wrap.classList.contains('collapsed'),
+            'refreshing trash data must not collapse a user-expanded Trash section');
+    });
+
+    it('collapses Trash when it becomes empty', () => {
+        const ctx = loadModules();
+        const wrap = ctx.document.getElementById('trashWrap');
+        wrap.classList.remove('collapsed');
+
+        ctx.loadTrashList([]);
+
+        assert.ok(wrap.classList.contains('collapsed'),
+            'empty Trash should collapse because there is nothing to display');
+    });
+
     it('each trash item button operates on the correct thread', () => {
         const ctx = loadModules();
         ctx._postedMessages = [];

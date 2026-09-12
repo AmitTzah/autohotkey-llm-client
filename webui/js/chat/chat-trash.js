@@ -37,8 +37,11 @@ function loadTrashList(threads) {
     })(threads[i]);
   }
 
-  var trashWrap = document.getElementById('trashWrap');
-  if (trashWrap) trashWrap.classList.remove('collapsed');
+  // Preserve the user's disclosure choice across trash data refreshes.
+  // Thread loads refresh both sidebar lists, so auto-expanding non-empty Trash
+  // here makes it open whenever a chat is selected. Empty Trash still collapses
+  // above because there is nothing useful to disclose.
+
   if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 

@@ -2316,4 +2316,72 @@ scenarios.push({
   }
 });
 
+scenarios.push({
+  id: 344,
+  name: 'Selecting a low sidebar chat must not auto-expand a non-empty collapsed Trash section',
+  regression: true,
+  mode: null,
+  settings: { trash: { retentionDays: 30 } },
+  fixtures: {
+    threads: [
+      { id: 't-trash-disclosure-344', title: 'Deleted chat', is_deleted: 1, deleted_at: '2026-09-11 12:00:00' },
+      { id: 't-low-344-01', title: 'Chat 01', updated_at: '2026-09-12 12:01:00' },
+      { id: 't-low-344-02', title: 'Chat 02', updated_at: '2026-09-12 12:02:00' },
+      { id: 't-low-344-03', title: 'Chat 03', updated_at: '2026-09-12 12:03:00' },
+      { id: 't-low-344-04', title: 'Chat 04', updated_at: '2026-09-12 12:04:00' },
+      { id: 't-low-344-05', title: 'Chat 05', updated_at: '2026-09-12 12:05:00' },
+      { id: 't-low-344-06', title: 'Chat 06', updated_at: '2026-09-12 12:06:00' },
+      { id: 't-low-344-07', title: 'Chat 07', updated_at: '2026-09-12 12:07:00' },
+      { id: 't-low-344-08', title: 'Chat 08', updated_at: '2026-09-12 12:08:00' },
+      { id: 't-low-344-09', title: 'Chat 09', updated_at: '2026-09-12 12:09:00' },
+      { id: 't-low-344-10', title: 'Chat 10', updated_at: '2026-09-12 12:10:00' },
+      { id: 't-low-344-11', title: 'Chat 11', updated_at: '2026-09-12 12:11:00' },
+      { id: 't-low-344-12', title: 'Chat 12', updated_at: '2026-09-12 12:12:00' }
+    ]
+  },
+  async body({ cdp }) {
+    await showChat();
+    await cdp.waitFor(
+      'document.querySelectorAll("#thread-list .chat-item").length >= 12 && document.querySelectorAll(".trash-items .trash-item").length === 1',
+      15000, 200, 'sidebar chats and trash rendered'
+    );
+
+    await cdp.eval(`(() => {
+      const list = document.getElementById('thread-list');
+      if (list) list.scrollTop = list.scrollHeight;
+      const wrap = document.getElementById('trashWrap');
+      if (wrap) wrap.classList.add('collapsed');
+      return true;
+    })()`);
+
+    const before = await cdp.eval(
+      'document.getElementById("trashWrap").classList.contains("collapsed")'
+    );
+    if (!before)
+      throw new Error('setup: Trash was not collapsed before selecting the low chat');
+
+    await cdp.eval(`(() => {
+      const items = document.querySelectorAll('#thread-list .chat-item');
+      if (!items.length) return false;
+      items[items.length - 1].click();
+      return true;
+    })()`);
+    await cdp.waitFor(
+      'window.activeThreadId && window.activeThreadId.indexOf("t-low-344-") === 0',
+      15000, 200, 'low sidebar chat loaded'
+    );
+    await sleep(500);
+
+    const state = await cdp.eval(`(() => ({
+      collapsed: document.getElementById('trashWrap').classList.contains('collapsed'),
+      trashCount: document.querySelectorAll('.trash-items .trash-item').length,
+      activeThreadId: window.activeThreadId
+    }))()`);
+    if (!state.collapsed || state.trashCount !== 1)
+      throw new Error('thread refresh changed Trash disclosure state: ' + JSON.stringify(state));
+
+    return 'clicking a low chat refreshed sidebar data without overriding the collapsed Trash disclosure';
+  }
+});
+
 module.exports = scenarios;
